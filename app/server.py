@@ -29,6 +29,11 @@ class EvolvePayload(BaseModel):
     mutation_rate: float = 0.22
 
 
+class MapPayload(BaseModel):
+    preset: str
+    seed: int | None = None
+
+
 @app.on_event("startup")
 async def startup() -> None:
     await manager.ensure_loop()
@@ -82,6 +87,12 @@ async def resume() -> dict[str, Any]:
 @app.post("/api/speed")
 async def speed(payload: SpeedPayload) -> dict[str, Any]:
     await manager.set_speed(payload.speed)
+    return await manager.snapshot()
+
+
+@app.post("/api/map")
+async def set_map(payload: MapPayload) -> dict[str, Any]:
+    await manager.set_map(payload.preset, payload.seed)
     return await manager.snapshot()
 
 

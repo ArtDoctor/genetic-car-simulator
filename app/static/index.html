@@ -22,6 +22,7 @@
       <nav>
         <button id="tab-sim" class="active">Simulation</button>
         <button id="tab-random">Random car lab</button>
+        <button id="tab-genealogy">Genealogy</button>
       </nav>
     </header>
 
@@ -40,6 +41,14 @@
           <button id="randomize">Randomize generation</button>
           <button id="evolve" class="primary">Re-generate from performance</button>
           <label>
+            Map
+            <select id="map-select">
+              <option value="easy" selected>Easy rolling test road</option>
+              <option value="mixed">Mixed evolution road</option>
+              <option value="brutal">Brutal rollover gauntlet</option>
+            </select>
+          </label>
+          <label>
             Time speed: <strong id="speed-label">1×</strong>
             <input id="speed" type="range" min="0.25" max="30" step="0.25" value="1" />
           </label>
@@ -54,6 +63,25 @@
           <div id="cars-list" class="cars-list"></div>
         </div>
       </aside>
+    </main>
+
+    <main id="genealogy-view" class="view">
+      <section class="genealogy-layout">
+        <div class="card genealogy-card">
+          <h2>Generation timeline / reproduction tree</h2>
+          <p>Left-to-right generations. Lines show parent genes used by copied, elite, or crossover children. Nodes with no outgoing lines were removed from the population.</p>
+          <div id="genealogy-tree" class="genealogy-tree">No genealogy yet.</div>
+        </div>
+        <aside class="card legend-card">
+          <h2>Legend</h2>
+          <div class="legend-row"><span class="legend-dot random"></span> random/new</div>
+          <div class="legend-row"><span class="legend-dot elite"></span> elite reused</div>
+          <div class="legend-row"><span class="legend-dot copy"></span> copied/mutated</div>
+          <div class="legend-row"><span class="legend-dot crossover"></span> crossover/mutation</div>
+          <p class="small-note">Grey faded nodes have no children in the next generation.</p>
+          <pre id="genealogy-details">Click a node in the tree.</pre>
+        </aside>
+      </section>
     </main>
 
     <main id="random-view" class="view">

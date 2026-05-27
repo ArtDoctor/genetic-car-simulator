@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from .ga import CarGene, POWER_BUDGET, evolve_population, random_gene, random_population
-from .road import Road
+from .road import ROAD_PRESETS, Road
 
 
 def dot(a: tuple[float, float], b: tuple[float, float]) -> float:
@@ -117,7 +117,9 @@ class SimCar(BaseModel):
                 f_n = max(0.0, 1350.0 * pen - 58.0 * dot(v_at, normal))
                 self.apply_force((normal[0] * f_n, normal[1] * f_n), wp, dt)
                 vt = dot(v_at, tangent)
-                scrape = clamp(vt * 8.0, -f_n * 1.05, f_n * 1.05)
+                # High body-ground friction: bad low bodies should scrape, slow down,
+                # and catch on obstacles instead of sliding over them easily.
+                scrape = clamp(vt * 18.0, -f_n * 1.85, f_n * 1.85)
                 self.apply_force((-tangent[0] * scrape, -tangent[1] * scrape), wp, dt)
 
         self.x += self.vx * dt
@@ -203,9 +205,10 @@ def polygon_area(points: list[list[float]]) -> float:
 
 class SimulationManager:
     def __init__(self) -> None:
-        self.road = Road(seed=1337)
+        self.road = Road(seed=1337, preset="easy")
         self.generation = 0
         self.population: list[CarGene] = random_population(generation=0, seed=42)
+        self.genealogy: list[dict[str, Any]] = []
         self.cars: list[SimCar] = []
         self.running = False
         self.sim_time = 0.0
@@ -216,7 +219,31 @@ class SimulationManager:
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
         self._last_seed = 1000
+        self._record_generation()
         self.reset_cars()
+
+    def _record_generation(self) -> None:
+        entry = {
+            "generation": self.generation,
+            "cars": [
+                {
+                    "id": gene.id,
+                    "color": gene.color,
+                    "lineage": gene.lineage,
+                    "reproduction": gene.reproduction,
+                    "parentIds": gene.parent_ids,
+                    "fitness": gene.fitness,
+                    "distance": gene.distance,
+                    "timeAlive": gene.time_alive,
+                    "wheelCount": len(gene.wheels),
+                    "usedPowerFraction": round(sum(w.power_fraction for w in gene.wheels), 3),
+                }
+                for gene in self.population
+            ],
+        }
+        self.genealogy = [g for g in self.genealogy if g["generation"] != self.generation]
+        self.genealogy.append(entry)
+        self.genealogy.sort(key=lambda item: item["generation"])
 
     def reset_cars(self) -> None:
         lane_gap = self.road.width / max(1, len(self.population))
@@ -260,10 +287,12 @@ class SimulationManager:
             car.gene.fitness = round(car.fitness, 3)
             car.gene.distance = round(max(0.0, car.max_x - 4.0), 3)
             car.gene.time_alive = round(self.sim_time, 3) if car.gene.time_alive == 0 else car.gene.time_alive
+        self._record_generation()
 
     async def start(self) -> None:
         async with self._lock:
             self.reset_cars()
+            self._record_generation()
             self.running = True
         await self.ensure_loop()
 
@@ -280,8 +309,20 @@ class SimulationManager:
             self.generation = 0
             self._last_seed = seed if seed is not None else self._last_seed + 1
             self.population = random_population(generation=0, seed=self._last_seed)
+            self.genealogy = []
+            self.running = False
+            self._record_generation()
+            self.reset_cars()
+
+    async def set_map(self, preset: str, seed: int | None = None) -> None:
+        async with self._lock:
+            if preset not in ROAD_PRESETS:
+                preset = "mixed"
+            road_seed = self.road.seed if seed is None else seed
+            self.road = Road(seed=road_seed, preset=preset)
             self.running = False
             self.reset_cars()
+            self._record_generation()
 
     async def evolve(self, elite_count: int = 2, copy_count: int = 1, mutation_rate: float = 0.22) -> None:
         async with self._lock:
@@ -297,6 +338,7 @@ class SimulationManager:
                 mutation_rate=mutation_rate,
             )
             self.running = False
+            self._record_generation()
             self.reset_cars()
 
     async def random_car(self, seed: int | None = None) -> CarGene:
@@ -314,6 +356,11 @@ class SimulationManager:
                 "stallSeconds": self.stall_seconds,
                 "maxTime": self.max_time,
                 "road": self.road.to_dict(),
+                "mapOptions": [
+                    {"id": key, "label": value["label"]}
+                    for key, value in ROAD_PRESETS.items()
+                ],
+                "genealogy": self.genealogy,
                 "population": [g.to_dict() for g in self.population],
                 "cars": [c.state() for c in self.cars],
                 "bestId": best.id if best else None,

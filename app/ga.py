@@ -28,15 +28,25 @@ class CarGene(BaseModel):
     wheels: list[WheelGene]
     color: str
     lineage: str = "random"
+    reproduction: str = "random"
+    parent_ids: list[str] = []
     fitness: float = 0.0
     distance: float = 0.0
     time_alive: float = 0.0
 
-    def copy_for_generation(self, generation: int, lineage: str) -> "CarGene":
+    def copy_for_generation(
+        self,
+        generation: int,
+        lineage: str,
+        parent_ids: list[str] | None = None,
+        reproduction: str | None = None,
+    ) -> "CarGene":
         clone = self.model_copy(deep=True)
         clone.id = str(uuid4())[:8]
         clone.generation = generation
         clone.lineage = lineage
+        clone.reproduction = reproduction or lineage
+        clone.parent_ids = parent_ids if parent_ids is not None else [self.id]
         clone.fitness = 0.0
         clone.distance = 0.0
         clone.time_alive = 0.0
@@ -70,8 +80,37 @@ def extruded_body_mesh(body: list[list[float]], width: float) -> dict[str, Any]:
 
 
 def _hex_color(rng: random.Random) -> str:
-    palette = ["#ff6b6b", "#feca57", "#48dbfb", "#1dd1a1", "#5f27cd", "#ff9ff3", "#54a0ff", "#c8d6e5"]
-    return rng.choice(palette)
+    # Color is a visual-only chromosome gene. It mutates/crosses over for lineage
+    # tracking, but it does not affect physics or fitness.
+    return "#" + "".join(f"{rng.randrange(32, 256):02x}" for _ in range(3))
+
+
+def _hex_to_rgb(color: str) -> tuple[int, int, int]:
+    color = color.lstrip("#")
+    if len(color) != 6:
+        return (180, 180, 180)
+    return (int(color[0:2], 16), int(color[2:4], 16), int(color[4:6], 16))
+
+
+def _rgb_to_hex(rgb: tuple[float, float, float]) -> str:
+    return "#" + "".join(f"{int(clamp_float(v, 0, 255)):02x}" for v in rgb)
+
+
+def blend_colors(a: str, b: str, rng: random.Random) -> str:
+    ar, ag, ab = _hex_to_rgb(a)
+    br, bg, bb = _hex_to_rgb(b)
+    t = rng.uniform(0.35, 0.65)
+    return _rgb_to_hex((ar * t + br * (1 - t), ag * t + bg * (1 - t), ab * t + bb * (1 - t)))
+
+
+def mutate_color(color: str, rng: random.Random, rate: float, strength: float = 1.0) -> str:
+    rgb = list(_hex_to_rgb(color))
+    for i in range(3):
+        if rng.random() < rate:
+            rgb[i] += rng.gauss(0, 38 * strength)
+    if rng.random() < rate * 0.2:
+        rng.shuffle(rgb)
+    return _rgb_to_hex(tuple(rgb))
 
 
 def _sort_polygon(points: list[list[float]]) -> list[list[float]]:
@@ -134,54 +173,106 @@ def _cap_power(wheels: list[WheelGene], rng: random.Random | None = None) -> Non
 
 
 def repair_wheels(body: list[list[float]], wheels: list[WheelGene], rng: random.Random | None = None) -> list[WheelGene]:
-    """Clamp and space wheels so their 2D circles never intersect."""
+    """Clamp and nudge wheels so their 2D circles never intersect.
+
+    Wheel centers are intentionally allowed all around the side silhouette:
+    inside the body, above it, on the sides, and below it. Evolution can discover
+    whether those odd placements help or hurt.
+    """
     if not wheels:
         return wheels
-    wheels = sorted(wheels[:4], key=lambda w: w.x)
-    min_x, max_x, _min_y, _max_y = _body_bounds(body)
-    left = min_x + 0.14
-    right = max_x - 0.14
-    if right - left < 0.35:
-        center = (min_x + max_x) / 2
-        left, right = center - 0.175, center + 0.175
-    n = len(wheels)
-    available = right - left
-    gap = min(0.08, available / max(12, n * 6))
-
-    # If many wheels are requested, shrink them enough to physically fit across
-    # the side silhouette. They may touch the body, but not each other.
-    max_r = max(0.10, min(0.7, (available - gap * (n - 1)) / max(1, 2 * n)))
-    for w in wheels:
-        w.radius = round(clamp_float(w.radius, 0.10, max_r), 3)
-
-    needed = sum(2 * w.radius for w in wheels) + gap * (n - 1)
-    if needed > available:
-        radius_budget = max(0.08 * n, available - gap * (n - 1))
-        scale = radius_budget / max(1e-6, sum(2 * w.radius for w in wheels))
-        for w in wheels:
-            w.radius = round(max(0.04, w.radius * scale), 3)
-        needed = sum(2 * w.radius for w in wheels) + gap * (n - 1)
-
-    # Pack wheels with random slack gaps. This guarantees non-intersection even
-    # after extreme body/wheel mutations while preserving wheel ordering.
-    slack = max(0.0, available - needed)
-    if rng:
-        weights = [rng.random() + 0.15 for _ in range(n + 1)]
-    else:
-        weights = [1.0 for _ in range(n + 1)]
-    weight_total = sum(weights) or 1.0
-    slack_gaps = [slack * w / weight_total for w in weights]
-    cursor = left + slack_gaps[0]
-    for i, w in enumerate(wheels):
-        cursor += w.radius
-        w.x = round(cursor, 3)
-        cursor += w.radius
-        if i < n - 1:
-            cursor += gap + slack_gaps[i + 1]
+    wheels = wheels[:4]
+    min_x, max_x, min_y, max_y = _body_bounds(body)
+    left = min_x - 0.22
+    right = max_x + 0.22
+    bottom = min_y - 0.22
+    top = max_y + 0.42
+    span_x = max(0.5, right - left)
+    span_y = max(0.5, top - bottom)
+    max_r = max(0.08, min(0.62, min(span_x, span_y) * 0.24))
+    gap = 0.035
 
     for w in wheels:
-        w.y = round(lower_y_at(body, w.x) - 0.075, 3)
+        w.radius = round(clamp_float(w.radius, 0.08, max_r), 3)
+        w.x = clamp_float(w.x, left + w.radius, right - w.radius)
+        w.y = clamp_float(w.y, bottom + w.radius, top - w.radius)
         w.power_fraction = round(clamp_float(w.power_fraction, 0.0, 1.0), 3)
+
+    for _ in range(28):
+        changed = False
+        for i in range(len(wheels)):
+            for j in range(i + 1, len(wheels)):
+                a = wheels[i]
+                b = wheels[j]
+                dx = b.x - a.x
+                dy = b.y - a.y
+                dist = math.hypot(dx, dy)
+                min_dist = a.radius + b.radius + gap
+                if dist < min_dist:
+                    if dist < 1e-6:
+                        angle = (rng.random() if rng else 0.37) * math.tau
+                        nx, ny = math.cos(angle), math.sin(angle)
+                        dist = 1e-6
+                    else:
+                        nx, ny = dx / dist, dy / dist
+                    push = (min_dist - dist) * 0.52
+                    a.x -= nx * push
+                    a.y -= ny * push
+                    b.x += nx * push
+                    b.y += ny * push
+                    changed = True
+        for w in wheels:
+            w.x = clamp_float(w.x, left + w.radius, right - w.radius)
+            w.y = clamp_float(w.y, bottom + w.radius, top - w.radius)
+        if not changed:
+            break
+
+    # If a very crowded mutated layout still overlaps, shrink only enough to fit.
+    for _ in range(3):
+        any_overlap = False
+        for i, a in enumerate(wheels):
+            for b in wheels[i + 1 :]:
+                dist = math.hypot(b.x - a.x, b.y - a.y)
+                if dist < a.radius + b.radius + 0.002:
+                    scale = max(0.35, dist / max(1e-6, a.radius + b.radius + gap))
+                    a.radius = round(max(0.035, a.radius * scale), 3)
+                    b.radius = round(max(0.035, b.radius * scale), 3)
+                    any_overlap = True
+        for w in wheels:
+            w.x = clamp_float(w.x, left + w.radius, right - w.radius)
+            w.y = clamp_float(w.y, bottom + w.radius, top - w.radius)
+        if not any_overlap:
+            break
+
+    def has_overlap() -> bool:
+        return any(
+            math.hypot(b.x - a.x, b.y - a.y) < a.radius + b.radius + 1e-6
+            for i, a in enumerate(wheels)
+            for b in wheels[i + 1 :]
+        )
+
+    # Absolute guarantee: if clamping made iterative repair impossible, fall back
+    # to a small randomised grid inside the allowed area.
+    if has_overlap():
+        n = len(wheels)
+        cols = 2 if n > 1 else 1
+        rows = 2 if n > 2 else 1
+        cell_w = span_x / cols
+        cell_h = span_y / rows
+        safe_r = max(0.035, min(max_r, cell_w * 0.33, cell_h * 0.33))
+        cells = [(c, r) for r in range(rows) for c in range(cols)]
+        if rng:
+            rng.shuffle(cells)
+        for w, (c, r) in zip(wheels, cells):
+            jitter_x = (rng.uniform(-0.12, 0.12) if rng else 0.0) * cell_w
+            jitter_y = (rng.uniform(-0.12, 0.12) if rng else 0.0) * cell_h
+            w.radius = round(min(w.radius, safe_r), 3)
+            w.x = left + (c + 0.5) * cell_w + jitter_x
+            w.y = bottom + (r + 0.5) * cell_h + jitter_y
+
+    for w in wheels:
+        w.x = round(clamp_float(w.x, left + w.radius, right - w.radius), 3)
+        w.y = round(clamp_float(w.y, bottom + w.radius, top - w.radius), 3)
     _cap_power(wheels, rng)
     return wheels
 
@@ -193,22 +284,21 @@ def clamp_float(v: float, low: float, high: float) -> float:
 def random_gene(generation: int = 0, rng: random.Random | None = None) -> CarGene:
     rng = rng or random.Random()
     body = random_body(rng)
-    min_x, max_x, _min_y, _max_y = _body_bounds(body)
+    min_x, max_x, min_y, max_y = _body_bounds(body)
     wheel_count = rng.randint(2, 4)
     usage = rng.uniform(0.55, 1.0)
     weights = [rng.random() ** 1.3 for _ in range(wheel_count)]
     total = sum(weights) or 1.0
-    span = max_x - min_x
     wheels = []
-    for i, weight in enumerate(weights):
-        slot_left = min_x + 0.18 + span * i / wheel_count
-        slot_right = min_x + span * (i + 1) / wheel_count - 0.18
-        x = rng.uniform(min(slot_left, slot_right), max(slot_left, slot_right))
-        radius = rng.uniform(0.24, 0.58)
+    for weight in weights:
+        radius = rng.uniform(0.20, 0.52)
+        # Random attachment in/around the side profile: inside, top, sides, or low.
+        x = rng.uniform(min_x - 0.12, max_x + 0.12)
+        y = rng.uniform(min_y - 0.12, max_y + 0.32)
         wheels.append(
             WheelGene(
                 x=round(x, 3),
-                y=round(lower_y_at(body, x) - rng.uniform(0.02, 0.2), 3),
+                y=round(y, 3),
                 radius=round(radius, 3),
                 power_fraction=round(usage * weight / total, 3),
             )
@@ -235,8 +325,10 @@ def _mut(v: float, rng: random.Random, amount: float, low: float, high: float) -
 
 
 def mutate(gene: CarGene, rng: random.Random, rate: float = 0.22, strength: float = 1.0) -> CarGene:
-    g = gene.copy_for_generation(gene.generation, "mutation")
-    g.color = gene.color
+    g = gene.model_copy(deep=True)
+    g.color = mutate_color(gene.color, rng, rate=rate, strength=strength)
+    if "mutation" not in g.lineage:
+        g.lineage = f"{g.lineage}+mutation"
     if rng.random() < rate:
         g.width = round(_mut(g.width, rng, 0.18 * strength, 0.55, 1.9), 3)
     if rng.random() < rate:
@@ -247,22 +339,22 @@ def mutate(gene: CarGene, rng: random.Random, rate: float = 0.22, strength: floa
         if rng.random() < rate:
             p[1] = round(_mut(p[1], rng, 0.12 * strength, -0.9, 0.9), 3)
     g.body = _sort_polygon(g.body)
-    min_x, max_x, _min_y, _max_y = _body_bounds(g.body)
+    min_x, max_x, min_y, max_y = _body_bounds(g.body)
     for w in g.wheels:
         if rng.random() < rate:
-            w.x = round(_mut(w.x, rng, 0.18 * strength, min_x + 0.1, max_x - 0.1), 3)
-            w.y = round(lower_y_at(g.body, w.x) - abs(rng.gauss(0.08, 0.05)), 3)
+            w.x = round(_mut(w.x, rng, 0.24 * strength, min_x - 0.2, max_x + 0.2), 3)
+        if rng.random() < rate:
+            w.y = round(_mut(w.y, rng, 0.22 * strength, min_y - 0.2, max_y + 0.38), 3)
         if rng.random() < rate:
             w.radius = round(_mut(w.radius, rng, 0.08 * strength, 0.18, 0.7), 3)
         if rng.random() < rate:
             w.power_fraction = round(_mut(w.power_fraction, rng, 0.12 * strength, 0.0, 1.0), 3)
     if rng.random() < rate * 0.25 and len(g.wheels) < 4:
-        x = rng.uniform(min_x + 0.15, max_x - 0.15)
         g.wheels.append(
             WheelGene(
-                x=round(x, 3),
-                y=round(lower_y_at(g.body, x) - 0.1, 3),
-                radius=round(rng.uniform(0.22, 0.58), 3),
+                x=round(rng.uniform(min_x - 0.16, max_x + 0.16), 3),
+                y=round(rng.uniform(min_y - 0.16, max_y + 0.34), 3),
+                radius=round(rng.uniform(0.18, 0.52), 3),
                 power_fraction=round(rng.uniform(0.05, 0.3), 3),
             )
         )
@@ -278,13 +370,19 @@ def crossover(a: CarGene, b: CarGene, rng: random.Random, generation: int) -> Ca
     # Use one body as the topology and gently blend matching vertices where possible.
     base = deepcopy(a if rng.random() < 0.5 else b)
     other = b if base.id == a.id else a
-    child = base.copy_for_generation(generation, f"crossover {a.id} x {b.id}")
+    child = base.copy_for_generation(
+        generation,
+        f"crossover {a.id} x {b.id}",
+        parent_ids=[a.id, b.id],
+        reproduction="crossover",
+    )
     for i, p in enumerate(child.body):
         if i < len(other.body) and rng.random() < 0.55:
             p[0] = round((p[0] + other.body[i][0]) / 2 + rng.gauss(0, 0.035), 3)
             p[1] = round((p[1] + other.body[i][1]) / 2 + rng.gauss(0, 0.03), 3)
     child.width = round((a.width + b.width) / 2 + rng.gauss(0, 0.05), 3)
     child.density = round((a.density + b.density) / 2 + rng.gauss(0, 0.04), 3)
+    child.color = blend_colors(a.color, b.color, rng)
     max_wheels = max(len(a.wheels), len(b.wheels))
     wheels: list[WheelGene] = []
     for i in range(max_wheels):
@@ -298,15 +396,16 @@ def crossover(a: CarGene, b: CarGene, rng: random.Random, generation: int) -> Ca
         if len(candidates) == 2 and rng.random() < 0.6:
             wa, wb = candidates
             x = (wa.x + wb.x) / 2
+            y = (wa.y + wb.y) / 2
             radius = (wa.radius + wb.radius) / 2
             power = (wa.power_fraction + wb.power_fraction) / 2
         else:
             wc = rng.choice(candidates)
-            x, radius, power = wc.x, wc.radius, wc.power_fraction
+            x, y, radius, power = wc.x, wc.y, wc.radius, wc.power_fraction
         wheels.append(
             WheelGene(
                 x=round(x, 3),
-                y=round(lower_y_at(child.body, x) - 0.08, 3),
+                y=round(y, 3),
                 radius=round(radius, 3),
                 power_fraction=round(power, 3),
             )
@@ -344,5 +443,6 @@ def evolve_population(
         child = crossover(parent_a, parent_b, rng, generation)
         child = mutate(child, rng, rate=mutation_rate, strength=1.0)
         child.lineage = "crossover+mutation"
+        child.reproduction = "crossover+mutation"
         next_gen.append(child)
     return next_gen[:POPULATION_SIZE]

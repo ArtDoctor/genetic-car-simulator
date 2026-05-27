@@ -8,8 +8,49 @@ from typing import Tuple
 from pydantic import BaseModel, PrivateAttr
 
 
+ROAD_PRESETS = {
+    "easy": {
+        "label": "Easy rolling test road",
+        "hill": 0.45,
+        "random_slope": 0.16,
+        "max_slope": 0.62,
+        "ragged": 0.12,
+        "obstacle_min": 0.12,
+        "obstacle_max": 0.65,
+        "obstacle_spacing": (10.0, 19.0),
+        "obstacle_width": (0.85, 2.7),
+        "up_bias": 0.48,
+    },
+    "mixed": {
+        "label": "Mixed evolution road",
+        "hill": 0.72,
+        "random_slope": 0.24,
+        "max_slope": 0.82,
+        "ragged": 0.18,
+        "obstacle_min": 0.18,
+        "obstacle_max": 0.95,
+        "obstacle_spacing": (8.0, 16.0),
+        "obstacle_width": (0.75, 2.5),
+        "up_bias": 0.56,
+    },
+    "brutal": {
+        "label": "Brutal rollover gauntlet",
+        "hill": 1.0,
+        "random_slope": 0.42,
+        "max_slope": 1.25,
+        "ragged": 0.30,
+        "obstacle_min": 0.38,
+        "obstacle_max": 1.55,
+        "obstacle_spacing": (5.5, 12.0),
+        "obstacle_width": (0.45, 1.9),
+        "up_bias": 0.68,
+    },
+}
+
+
 class Road(BaseModel):
     seed: int = 1337
+    preset: str = "easy"
     length: float = 650.0
     dx: float = 0.75
     width: float = 26.0
@@ -26,19 +67,22 @@ class Road(BaseModel):
 
     def _generate(self) -> list[Tuple[float, float]]:
         rng = random.Random(self.seed)
+        params = ROAD_PRESETS.get(self.preset, ROAD_PRESETS["mixed"])
         count = int(self.length / self.dx) + 1
         samples: list[Tuple[float, float]] = []
 
         # Pre-generate narrow triangular teeth/rocks. They are constant across the
         # road width but abrupt along x, so short wheelbases and tall cars flip.
         obstacles: list[tuple[float, float, float, float]] = []
-        x = 22.0
+        x = 24.0
+        spacing_min, spacing_max = params["obstacle_spacing"]
+        width_min, width_max = params["obstacle_width"]
         while x < self.length - 20:
-            x += rng.uniform(5.0, 12.0)
-            half_width = rng.uniform(0.45, 1.9)
-            height = rng.choice([-1.0, 1.0]) * rng.uniform(0.45, 1.75)
+            x += rng.uniform(spacing_min, spacing_max)
+            half_width = rng.uniform(width_min, width_max)
+            height = rng.choice([-1.0, 1.0]) * rng.uniform(params["obstacle_min"], params["obstacle_max"])
             # Most obstacles are upward rocks; some are sharp potholes.
-            if rng.random() < 0.68:
+            if rng.random() < params["up_bias"]:
                 height = abs(height)
             skew = rng.uniform(-0.45, 0.45)
             obstacles.append((x, half_width, height, skew))
@@ -49,15 +93,17 @@ class Road(BaseModel):
             x = i * self.dx
             # Rolling hills are only the base. The high-frequency random walk and
             # triangular obstacles make the terrain intentionally hostile.
-            target = (
-                1.25 * math.sin(x * 0.032)
-                + 0.7 * math.sin(x * 0.091 + 1.1)
-                + 0.28 * math.sin(x * 0.53 + 0.5)
+            hill = params["hill"]
+            target = hill * (
+                1.1 * math.sin(x * 0.029)
+                + 0.55 * math.sin(x * 0.081 + 1.1)
+                + 0.18 * math.sin(x * 0.47 + 0.5)
             )
-            slope = 0.72 * slope + 0.16 * (target - y) + rng.uniform(-0.48, 0.48)
-            slope = max(-1.45, min(1.45, slope))
+            slope = 0.76 * slope + 0.12 * (target - y) + rng.uniform(-params["random_slope"], params["random_slope"])
+            slope = max(-params["max_slope"], min(params["max_slope"], slope))
             y += slope * self.dx
-            ragged = rng.uniform(-0.34, 0.34) + 0.22 * math.sin(x * 2.9) + 0.12 * math.sin(x * 7.1)
+            rag = params["ragged"]
+            ragged = rng.uniform(-rag, rag) + rag * 0.65 * math.sin(x * 2.9) + rag * 0.35 * math.sin(x * 7.1)
 
             obstacle_y = 0.0
             for ox, half_width, height, skew in obstacles:
@@ -108,6 +154,7 @@ class Road(BaseModel):
     def to_dict(self) -> dict:
         return {
             "seed": self.seed,
+            "preset": self.preset,
             "length": self.length,
             "width": self.width,
             "samples": self.samples,

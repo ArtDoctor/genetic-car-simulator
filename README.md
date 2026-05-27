@@ -1,6 +1,6 @@
-# Genetic Car Simulator Prototype
+# Genetic Car Simulator
 
-A browser-controlled prototype for evolving simple 3D cars over a fixed ragged road.
+A browser-controlled simulator for evolving simple 3D cars over a fixed ragged road.
 
 - Python owns genes, random car generation, crossover/elitism/copying/mutation, road generation, and toy physics evaluation.
 - The browser visualizes the simulation in 3D and shows each car's 2D body projection plus full gene JSON.
@@ -31,17 +31,8 @@ Open <http://localhost:8000>.
 - **Time speed** slider runs more/fewer physics substeps per wall-clock frame (up to 30x from the UI; backend supports up to 40x).
 - **Re-generate from performance** creates the next generation using elites, one copied/mutated survivor, tournament-selected crossover, and mutation.
 - **Randomize generation** starts over with 10 fresh random genes.
+- **Map** selects between easy, mixed, and brutal road presets. Easy is now the default.
+- Wheels can spawn anywhere around the side profile — inside, top, sides, or bottom — while still being repaired to avoid wheel-wheel intersections.
+- Color is a visual-only gene now: it crosses over and mutates for family/lineage tracking, but has no physics or fitness effect.
+- **Genealogy** tab shows the left-to-right reproduction tree: elite reuse, copies, crossover/mutation, and removed genes with no descendants.
 - 3D camera: `WASD` free-fly, `Q/E` down/up, hold `Shift` for faster movement, click-drag to orbit around the road center near your view, mouse wheel to center/dolly toward what is under the cursor, click a car to smoothly follow it, drag while a car is selected to orbit around that car, and press `Esc` to return to automatic overview.
-
-## Project layout
-
-```text
-app/ga.py       Genes, random generation, crossover, mutation, evolution
-app/road.py     Deterministic ragged road generator
-app/sim.py      Server-side toy vehicle physics + evaluation manager
-app/server.py   FastAPI app, REST controls, websocket state stream
-app/static/     Served HTML/CSS/JS UI
-frontend/src/   TypeScript source mirror for the UI
-```
-
-This is intentionally a prototype physics model, not a precision vehicle simulator. It is built to make genetic choices visibly matter and to provide a clean base for swapping in a stronger physics engine later.

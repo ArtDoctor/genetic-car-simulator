@@ -196,8 +196,9 @@ function makeCarMesh(gene) {
 }
 
 function syncMeshes(data) {
-  if (!state.roadMesh || state.roadSeed !== data.road.seed) {
+  if (!state.roadMesh || state.roadSeed !== data.road.seed || state.roadPreset !== data.road.preset) {
     state.roadSeed = data.road.seed;
+    state.roadPreset = data.road.preset;
     makeRoad(data.road);
   }
   const ids = new Set(data.population.map((g) => g.id));
@@ -431,11 +432,86 @@ function svgForGene(gene, carState = null, large = false) {
   </svg>`;
 }
 
+function reproductionClass(value = "") {
+  return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "random";
+}
+
+function reproductionColor(value = "") {
+  const cls = reproductionClass(value);
+  if (cls.includes("elite")) return "#3fb950";
+  if (cls.includes("copy")) return "#58a6ff";
+  if (cls.includes("crossover")) return "#d29922";
+  return "#94a3b8";
+}
+
+function updateGenealogy(data) {
+  const holder = $("genealogy-tree");
+  if (!holder || !data.genealogy?.length) return;
+  const key = data.genealogy.map((g) => `${g.generation}:${g.cars.map((c) => `${c.id}-${c.fitness}`).join(",")}`).join("|");
+  if (state.genealogyKey === key) return;
+  state.genealogyKey = key;
+  const generations = data.genealogy;
+  const nodeById = new Map();
+  generations.forEach((gen, gi) => gen.cars.forEach((car, ci) => nodeById.set(car.id, { ...car, gi, ci })));
+  const hasChild = new Set();
+  generations.forEach((gen) => gen.cars.forEach((car) => (car.parentIds || []).forEach((pid) => hasChild.add(pid))));
+  const colW = 178;
+  const rowH = 68;
+  const marginX = 64;
+  const marginY = 52;
+  const maxRows = Math.max(...generations.map((g) => g.cars.length), 1);
+  const width = marginX * 2 + Math.max(1, generations.length - 1) * colW + 120;
+  const height = marginY * 2 + maxRows * rowH;
+  const pos = (node) => ({ x: marginX + node.gi * colW, y: marginY + node.ci * rowH });
+  const edges = [];
+  generations.forEach((gen) => gen.cars.forEach((car) => {
+    const child = nodeById.get(car.id);
+    (car.parentIds || []).forEach((pid) => {
+      const parent = nodeById.get(pid);
+      if (parent && child) edges.push({ parent, child, reproduction: car.reproduction || car.lineage });
+    });
+  }));
+  const edgeSvg = edges.map((e) => {
+    const a = pos(e.parent);
+    const b = pos(e.child);
+    const x1 = a.x + 20, y1 = a.y;
+    const x2 = b.x - 20, y2 = b.y;
+    const mid = (x1 + x2) / 2;
+    const cls = reproductionClass(e.reproduction);
+    return `<path class="gene-edge ${cls}" d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" />`;
+  }).join("");
+  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#8b949e" font-size="12">Gen ${gen.generation}</text>`).join("");
+  const nodeSvg = generations.flatMap((gen) => gen.cars.map((car, ci) => {
+    const node = nodeById.get(car.id);
+    const p = pos(node);
+    const removed = gen.generation < data.generation && !hasChild.has(car.id);
+    const color = reproductionColor(car.reproduction || car.lineage);
+    const title = `${car.id} · ${car.reproduction}\nfitness ${Number(car.fitness || 0).toFixed(1)}\nparents ${(car.parentIds || []).join(", ") || "none"}`;
+    return `<g class="gene-node ${removed ? "removed" : ""}" data-gene-id="${car.id}" transform="translate(${p.x},${p.y})">
+      <title>${title}</title>
+      <circle r="18" fill="${color}" stroke="#e6edf3" stroke-width="1.2" />
+      <text x="0" y="4" text-anchor="middle" fill="#0b1220" font-weight="700">${ci + 1}</text>
+      <text x="25" y="-4">${car.id}</text>
+      <text x="25" y="11" fill="#8b949e">${car.reproduction || car.lineage}</text>
+      <text x="25" y="26" fill="#86efac">fit ${Number(car.fitness || 0).toFixed(1)}</text>
+    </g>`;
+  })).join("");
+  holder.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${generationLabels}${edgeSvg}${nodeSvg}</svg>`;
+  holder.querySelectorAll(".gene-node").forEach((node) => {
+    node.addEventListener("click", () => {
+      const gene = nodeById.get(node.dataset.geneId);
+      $("genealogy-details").textContent = JSON.stringify(gene, null, 2);
+    });
+  });
+}
+
 function updateUI(data) {
-  $("status").textContent = `gen ${data.generation} · ${data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
+  $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
+  if ($("map-select") && data.road?.preset && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
   const bestCar = [...data.cars].sort((a, b) => b.fitness - a.fitness)[0];
   $("best").textContent = bestCar ? `best ${bestCar.id}: ${bestCar.fitness.toFixed(1)} (${Math.max(0, bestCar.maxX - 4).toFixed(1)}m)` : "best: —";
   const list = $("cars-list");
+  updateGenealogy(data);
   list.innerHTML = data.population.map((gene) => {
     const car = data.cars.find((c) => c.id === gene.id);
     const cls = car?.done ? (car.reason === "crashed" ? "done crashed" : "done") : "";
@@ -489,17 +565,22 @@ $("speed").addEventListener("input", (event) => {
   $("speed-label").textContent = `${value.toFixed(value < 10 ? 2 : 0)}×`;
   fire(post("/api/speed", { speed: value }));
 });
+$("map-select").addEventListener("change", (event) => fire(post("/api/map", { preset: event.target.value })));
 $("mutation").addEventListener("input", (event) => { $("mutation-label").textContent = Number(event.target.value).toFixed(2); });
 
 function setTab(name) {
   $("simulation-view").classList.toggle("active", name === "sim");
   $("random-view").classList.toggle("active", name === "random");
+  $("genealogy-view").classList.toggle("active", name === "genealogy");
   $("tab-sim").classList.toggle("active", name === "sim");
   $("tab-random").classList.toggle("active", name === "random");
+  $("tab-genealogy").classList.toggle("active", name === "genealogy");
+  if (name === "genealogy" && state.data) updateGenealogy(state.data);
   setTimeout(resize, 0);
 }
 $("tab-sim").addEventListener("click", () => setTab("sim"));
 $("tab-random").addEventListener("click", () => setTab("random"));
+$("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
 
 async function generateOne() {
   const gene = await (await fetch(`/api/random-car?seed=${Date.now()}`)).json();
