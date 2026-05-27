@@ -14,7 +14,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .sim import SimulationManager
+from .sim_process import SimulationProcess
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
@@ -26,14 +26,14 @@ SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 @dataclass
 class SessionEntry:
-    manager: SimulationManager
+    manager: SimulationProcess
     last_seen: float
 
 
 class SessionStore:
     """In-memory per-visitor simulation managers.
 
-    The old server used one global SimulationManager, so every browser fought over
+    The old server used one global simulation manager, so every browser fought over
     the same population, road, and running state. Keeping a manager per visitor is
     the smallest backend change because the existing Python simulation stays as-is;
     the browser just gets a session cookie and all API/WebSocket traffic resolves
@@ -61,7 +61,7 @@ class SessionStore:
             samesite="lax",
         )
 
-    async def get_for_http(self, request: Request, response: Response) -> tuple[str, SimulationManager]:
+    async def get_for_http(self, request: Request, response: Response) -> tuple[str, SimulationProcess]:
         session_id = self._valid_session_id(request.cookies.get(SESSION_COOKIE_NAME))
         if session_id is None:
             session_id = self._new_session_id()
@@ -70,7 +70,7 @@ class SessionStore:
         async with self._lock:
             entry = self._sessions.get(session_id)
             if entry is None:
-                entry = SessionEntry(manager=SimulationManager(), last_seen=now)
+                entry = SessionEntry(manager=SimulationProcess(), last_seen=now)
                 self._sessions[session_id] = entry
             else:
                 entry.last_seen = now
@@ -79,7 +79,7 @@ class SessionStore:
         await entry.manager.ensure_loop()
         return session_id, entry.manager
 
-    async def get_for_websocket(self, websocket: WebSocket) -> tuple[str, SimulationManager]:
+    async def get_for_websocket(self, websocket: WebSocket) -> tuple[str, SimulationProcess]:
         session_id = self._valid_session_id(websocket.cookies.get(SESSION_COOKIE_NAME))
         session_id = session_id or self._valid_session_id(websocket.query_params.get("session"))
         if session_id is None:
@@ -89,7 +89,7 @@ class SessionStore:
         async with self._lock:
             entry = self._sessions.get(session_id)
             if entry is None:
-                entry = SessionEntry(manager=SimulationManager(), last_seen=now)
+                entry = SessionEntry(manager=SimulationProcess(), last_seen=now)
                 self._sessions[session_id] = entry
             else:
                 entry.last_seen = now
@@ -169,7 +169,7 @@ class AutoEvolvePayload(BaseModel):
     mutation_rate: float = 0.22
 
 
-async def current_manager(request: Request, response: Response) -> SimulationManager:
+async def current_manager(request: Request, response: Response) -> SimulationProcess:
     _, manager = await sessions.get_for_http(request, response)
     return manager
 
@@ -186,65 +186,64 @@ async def create_session(request: Request, response: Response) -> dict[str, str]
 
 
 @app.get("/api/state")
-async def state(manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def state(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     return await manager.snapshot()
 
 
 @app.get("/api/road")
-async def road(manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
-    return manager.road.to_dict()
+async def road(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
+    return await manager.road()
 
 
 @app.get("/api/random-car")
-async def random_car(seed: int | None = None, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
-    gene = await manager.random_car(seed=seed)
-    return gene.to_dict()
+async def random_car(seed: int | None = None, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
+    return await manager.random_car(seed=seed)
 
 
 @app.post("/api/randomize")
-async def randomize(seed: int | None = None, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def randomize(seed: int | None = None, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.randomize(seed=seed)
     return await manager.snapshot()
 
 
 @app.post("/api/start")
-async def start(manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def start(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.start()
     return await manager.snapshot()
 
 
 @app.post("/api/pause")
-async def pause(manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def pause(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.pause(True)
     return await manager.snapshot()
 
 
 @app.post("/api/resume")
-async def resume(manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def resume(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.pause(False)
     return await manager.snapshot()
 
 
 @app.post("/api/speed")
-async def speed(payload: SpeedPayload, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def speed(payload: SpeedPayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.set_speed(payload.speed)
     return await manager.snapshot()
 
 
 @app.post("/api/map")
-async def set_map(payload: MapPayload, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def set_map(payload: MapPayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.set_map(payload.preset, payload.seed)
     return await manager.snapshot()
 
 
 @app.post("/api/evolve")
-async def evolve(payload: EvolvePayload, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def evolve(payload: EvolvePayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.evolve(payload.elite_count, payload.copy_count, payload.mutation_rate)
     return await manager.snapshot()
 
 
 @app.post("/api/auto-evolve")
-async def auto_evolve(payload: AutoEvolvePayload, manager: SimulationManager = Depends(current_manager)) -> dict[str, Any]:
+async def auto_evolve(payload: AutoEvolvePayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.set_auto_evolve(payload.enabled, payload.elite_count, payload.copy_count, payload.mutation_rate)
     return await manager.snapshot()
 
@@ -253,9 +252,13 @@ async def auto_evolve(payload: AutoEvolvePayload, manager: SimulationManager = D
 async def sim_ws(websocket: WebSocket) -> None:
     session_id, manager = await sessions.get_for_websocket(websocket)
     await websocket.accept()
+    last_touch = 0.0
     try:
         while True:
-            await sessions.touch(session_id)
+            now = time.time()
+            if now - last_touch > 5.0:
+                await sessions.touch(session_id)
+                last_touch = now
             await websocket.send_json(await manager.snapshot())
             await asyncio.sleep(1 / 30)
     except WebSocketDisconnect:
