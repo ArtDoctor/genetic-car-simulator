@@ -6,7 +6,7 @@ A browser-controlled simulator for evolving simple 3D cars over a fixed ragged r
 - The browser visualizes the simulation in 3D and shows each car's 2D body projection plus full gene JSON.
 - A separate **Random car lab** tab generates standalone random car genes.
 
-## Run
+## Run locally
 
 ```bash
 ./setup_venv.sh
@@ -20,6 +20,21 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 python -m app.server
+```
+
+Open <http://localhost:8000>.
+
+## Run with Docker
+
+```bash
+docker build -t genetic-car-simulator .
+docker run --rm -p 8000:8000 genetic-car-simulator
+```
+
+Or with Docker Compose:
+
+```bash
+docker compose up --build
 ```
 
 Open <http://localhost:8000>.
