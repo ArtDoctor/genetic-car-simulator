@@ -1,0 +1,13 @@
+{
+  "name": "genetic-car-simulator-frontend",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit"
+  },
+  "devDependencies": {
+    "typescript": "^5.7.2",
+    "three": "^0.160.0",
+    "@types/three": "^0.160.0"
+  }
+}

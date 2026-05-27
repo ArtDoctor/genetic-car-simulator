@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Genetic Car Simulator</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "three": "https://unpkg.com/three@0.160.0/build/three.module.js"
+        }
+      }
+    </script>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Genetic Car Simulator</h1>
+        <p>Prototype: ragged fixed road, random 3D cars, server-side genetic algorithm + physics.</p>
+      </div>
+      <nav>
+        <button id="tab-sim" class="active">Simulation</button>
+        <button id="tab-random">Random car lab</button>
+      </nav>
+    </header>
+
+    <main id="simulation-view" class="view active">
+      <section class="sim-panel">
+        <div id="viewport"></div>
+        <div class="hud">
+          <span id="status">connecting…</span>
+          <span id="best">best: —</span>
+        </div>
+      </section>
+      <aside class="side-panel">
+        <div class="controls card">
+          <button id="start">Start evaluation</button>
+          <button id="pause">Pause</button>
+          <button id="randomize">Randomize generation</button>
+          <button id="evolve" class="primary">Re-generate from performance</button>
+          <label>
+            Time speed: <strong id="speed-label">1×</strong>
+            <input id="speed" type="range" min="0.25" max="30" step="0.25" value="1" />
+          </label>
+          <label>
+            Mutation rate
+            <input id="mutation" type="range" min="0" max="0.65" step="0.01" value="0.22" />
+            <strong id="mutation-label">0.22</strong>
+          </label>
+        </div>
+        <div class="card">
+          <h2>Current cars + genes</h2>
+          <div id="cars-list" class="cars-list"></div>
+        </div>
+      </aside>
+    </main>
+
+    <main id="random-view" class="view">
+      <section class="random-layout">
+        <div class="card random-stage">
+          <h2>Random car generation scene</h2>
+          <p>Generate standalone genes before running evolution.</p>
+          <button id="generate-one" class="primary">Generate random car</button>
+          <div id="random-svg" class="large-svg"></div>
+        </div>
+        <div class="card gene-card">
+          <h2>Gene JSON</h2>
+          <pre id="random-json">Click “Generate random car”.</pre>
+        </div>
+      </section>
+    </main>
+
+    <script type="module" src="/static/main.js"></script>
+  </body>
+</html>
