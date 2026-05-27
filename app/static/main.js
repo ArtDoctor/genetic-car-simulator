@@ -444,6 +444,29 @@ function reproductionColor(value = "") {
   return "#94a3b8";
 }
 
+function miniGenePreview(car) {
+  if (!car.body?.length) return "";
+  const xs = car.body.map((p) => p[0]);
+  const ys = car.body.map((p) => p[1]);
+  const minX = Math.min(...xs), maxX = Math.max(...xs);
+  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  const scale = Math.min(42 / Math.max(0.1, maxX - minX), 26 / Math.max(0.1, maxY - minY));
+  const cx = (minX + maxX) / 2;
+  const cy = (minY + maxY) / 2;
+  const pts = car.body.map(([x, y]) => `${(x - cx) * scale},${-(y - cy) * scale}`).join(" ");
+  const wheels = (car.wheels || []).map((w) => {
+    const x = (w.x - cx) * scale;
+    const y = -(w.y - cy) * scale;
+    const r = Math.max(2.2, w.radius * scale);
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111827" stroke="#e5e7eb" stroke-width="0.8" />`;
+  }).join("");
+  return `<g transform="translate(0,30)">
+    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#0b1220" stroke="#30363d" />
+    <polygon points="${pts}" fill="${car.color}" stroke="#fff" stroke-width="0.9" opacity="0.92" />
+    ${wheels}
+  </g>`;
+}
+
 function updateGenealogy(data) {
   const holder = $("genealogy-tree");
   if (!holder || !data.genealogy?.length) return;
@@ -455,8 +478,8 @@ function updateGenealogy(data) {
   generations.forEach((gen, gi) => gen.cars.forEach((car, ci) => nodeById.set(car.id, { ...car, gi, ci })));
   const hasChild = new Set();
   generations.forEach((gen) => gen.cars.forEach((car) => (car.parentIds || []).forEach((pid) => hasChild.add(pid))));
-  const colW = 178;
-  const rowH = 68;
+  const colW = 190;
+  const rowH = 104;
   const marginX = 64;
   const marginY = 52;
   const maxRows = Math.max(...generations.map((g) => g.cars.length), 1);
@@ -494,6 +517,7 @@ function updateGenealogy(data) {
       <text x="25" y="-4">${car.id}</text>
       <text x="25" y="11" fill="#8b949e">${car.reproduction || car.lineage}</text>
       <text x="25" y="26" fill="#86efac">fit ${Number(car.fitness || 0).toFixed(1)}</text>
+      ${miniGenePreview(car)}
     </g>`;
   })).join("");
   holder.innerHTML = `<svg viewBox="0 0 ${width} ${height}" width="${width}" height="${height}">${generationLabels}${edgeSvg}${nodeSvg}</svg>`;

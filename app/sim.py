@@ -237,6 +237,9 @@ class SimulationManager:
                     "timeAlive": gene.time_alive,
                     "wheelCount": len(gene.wheels),
                     "usedPowerFraction": round(sum(w.power_fraction for w in gene.wheels), 3),
+                    "body": gene.body,
+                    "wheels": [w.model_dump() for w in gene.wheels],
+                    "width": gene.width,
                 }
                 for gene in self.population
             ],
