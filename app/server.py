@@ -34,6 +34,13 @@ class MapPayload(BaseModel):
     seed: int | None = None
 
 
+class AutoEvolvePayload(BaseModel):
+    enabled: bool
+    elite_count: int = 2
+    copy_count: int = 1
+    mutation_rate: float = 0.22
+
+
 @app.on_event("startup")
 async def startup() -> None:
     await manager.ensure_loop()
@@ -99,6 +106,12 @@ async def set_map(payload: MapPayload) -> dict[str, Any]:
 @app.post("/api/evolve")
 async def evolve(payload: EvolvePayload) -> dict[str, Any]:
     await manager.evolve(payload.elite_count, payload.copy_count, payload.mutation_rate)
+    return await manager.snapshot()
+
+
+@app.post("/api/auto-evolve")
+async def auto_evolve(payload: AutoEvolvePayload) -> dict[str, Any]:
+    await manager.set_auto_evolve(payload.enabled, payload.elite_count, payload.copy_count, payload.mutation_rate)
     return await manager.snapshot()
 
 

@@ -4,6 +4,10 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Genetic Car Simulator</title>
+    <meta name="theme-color" content="#080b12" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet" />
     <link rel="stylesheet" href="/static/styles.css" />
     <script type="importmap">
       {
@@ -14,14 +18,15 @@
     </script>
   </head>
   <body>
-    <header>
-      <div>
+    <header class="app-header">
+      <div class="brand">
+        <span class="eyebrow">Evolution lab</span>
         <h1>Genetic Car Simulator</h1>
-        <p>Prototype: ragged fixed road, random 3D cars, server-side genetic algorithm + physics.</p>
+        <p>Train lightweight 3D car bodies over rugged generated roads.</p>
       </div>
-      <nav>
+      <nav class="tabs" aria-label="Primary views">
         <button id="tab-sim" class="active">Simulation</button>
-        <button id="tab-random">Random car lab</button>
+        <button id="tab-random">Random lab</button>
         <button id="tab-genealogy">Genealogy</button>
       </nav>
     </header>
@@ -36,30 +41,39 @@
       </section>
       <aside class="side-panel">
         <div class="controls card">
-          <button id="start">Start evaluation</button>
-          <button id="pause">Pause</button>
-          <button id="randomize">Randomize generation</button>
-          <button id="evolve" class="primary">Re-generate from performance</button>
-          <label>
-            Map
+          <div class="card-heading">
+            <span class="eyebrow">Controls</span>
+            <h2>Run evolution</h2>
+          </div>
+          <div class="button-grid">
+            <button id="start">Start</button>
+            <button id="pause">Pause</button>
+            <button id="randomize">Randomize</button>
+            <button id="evolve" class="primary">Evolve</button>
+            <button id="auto-evolve" class="wide">Auto-run</button>
+          </div>
+          <label class="field">
+            <span>Map</span>
             <select id="map-select">
               <option value="easy" selected>Easy rolling test road</option>
               <option value="mixed">Mixed evolution road</option>
               <option value="brutal">Brutal rollover gauntlet</option>
             </select>
           </label>
-          <label>
-            Time speed: <strong id="speed-label">1×</strong>
+          <label class="field">
+            <span>Time speed <strong id="speed-label">1×</strong></span>
             <input id="speed" type="range" min="0.25" max="30" step="0.25" value="1" />
           </label>
-          <label>
-            Mutation rate
+          <label class="field">
+            <span>Mutation rate <strong id="mutation-label">0.22</strong></span>
             <input id="mutation" type="range" min="0" max="0.65" step="0.01" value="0.22" />
-            <strong id="mutation-label">0.22</strong>
           </label>
         </div>
         <div class="card">
-          <h2>Current cars + genes</h2>
+          <div class="card-heading">
+            <span class="eyebrow">Population</span>
+            <h2>Current cars + genes</h2>
+          </div>
           <div id="cars-list" class="cars-list"></div>
         </div>
       </aside>
@@ -68,12 +82,18 @@
     <main id="genealogy-view" class="view">
       <section class="genealogy-layout">
         <div class="card genealogy-card">
-          <h2>Generation timeline / reproduction tree</h2>
+          <div class="card-heading">
+            <span class="eyebrow">Lineage</span>
+            <h2>Generation timeline</h2>
+          </div>
           <p>Left-to-right generations. Lines show parent genes used by copied, elite, or crossover children. Nodes with no outgoing lines were removed from the population.</p>
           <div id="genealogy-tree" class="genealogy-tree">No genealogy yet.</div>
         </div>
         <aside class="card legend-card">
-          <h2>Legend</h2>
+          <div class="card-heading">
+            <span class="eyebrow">Guide</span>
+            <h2>Legend</h2>
+          </div>
           <div class="legend-row"><span class="legend-dot random"></span> random/new</div>
           <div class="legend-row"><span class="legend-dot elite"></span> elite reused</div>
           <div class="legend-row"><span class="legend-dot copy"></span> copied/mutated</div>
@@ -87,13 +107,19 @@
     <main id="random-view" class="view">
       <section class="random-layout">
         <div class="card random-stage">
-          <h2>Random car generation scene</h2>
+          <div class="card-heading">
+            <span class="eyebrow">Sandbox</span>
+            <h2>Random car lab</h2>
+          </div>
           <p>Generate standalone genes before running evolution.</p>
           <button id="generate-one" class="primary">Generate random car</button>
           <div id="random-svg" class="large-svg"></div>
         </div>
         <div class="card gene-card">
-          <h2>Gene JSON</h2>
+          <div class="card-heading">
+            <span class="eyebrow">Output</span>
+            <h2>Gene JSON</h2>
+          </div>
           <pre id="random-json">Click “Generate random car”.</pre>
         </div>
       </section>

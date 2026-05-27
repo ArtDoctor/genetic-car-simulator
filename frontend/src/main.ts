@@ -6,6 +6,10 @@ const state = {
   meshes: new Map(),
   roadMesh: null,
   followX: 12,
+  focusTarget: new THREE.Vector3(12, 1.8, 0),
+  autoOrbitYaw: 2.18,
+  autoOrbitPitch: 0.32,
+  autoOrbitRadius: 34,
   cameraMode: "auto",
   followId: null,
   yaw: -0.65,
@@ -24,20 +28,24 @@ const state = {
 
 const viewport = $("viewport");
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050914);
-scene.fog = new THREE.Fog(0x050914, 60, 180);
+scene.background = new THREE.Color(0x050816);
+scene.fog = new THREE.Fog(0x050816, 72, 220);
 const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1000);
-const renderer = new THREE.WebGLRenderer({ antialias: true });
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
 renderer.shadowMap.enabled = true;
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.05;
 viewport.appendChild(renderer.domElement);
 
-const hemi = new THREE.HemisphereLight(0xb8d7ff, 0x101018, 2.4);
+const hemi = new THREE.HemisphereLight(0xc7ddff, 0x0c1020, 2.6);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+const sun = new THREE.DirectionalLight(0xffffff, 2.35);
 sun.position.set(12, 28, 18);
 sun.castShadow = true;
 scene.add(sun);
-const grid = new THREE.GridHelper(700, 70, 0x243044, 0x172033);
+const grid = new THREE.GridHelper(700, 70, 0x29364d, 0x111827);
 grid.rotation.x = Math.PI / 2;
 grid.position.y = -2.5;
 scene.add(grid);
@@ -48,6 +56,7 @@ camera.position.set(-6, 9, 20);
 
 function resize() {
   const rect = viewport.getBoundingClientRect();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
   renderer.setSize(rect.width, rect.height);
   camera.aspect = rect.width / Math.max(1, rect.height);
   camera.updateProjectionMatrix();
@@ -95,6 +104,7 @@ renderer.domElement.addEventListener("pointerup", (event) => {
   if (carId) {
     state.cameraMode = "follow";
     state.followId = carId;
+    state.orbitTarget = null;
   } else {
     state.cameraMode = state.dragPrevMode;
     state.followId = state.dragPrevFollowId;
@@ -102,15 +112,22 @@ renderer.domElement.addEventListener("pointerup", (event) => {
 });
 renderer.domElement.addEventListener("wheel", (event) => {
   event.preventDefault();
-  const hit = raycastFromEvent(event);
-  const carId = hit ? carIdForObject(hit.object) : null;
-  const target = carId && state.meshes.has(carId)
-    ? state.meshes.get(carId).position.clone().add(new THREE.Vector3(0, 1.2, 0))
-    : (hit ? hit.point.clone() : roadCenterTarget());
-  syncOrbitFromTarget(target);
-  state.cameraMode = state.followId ? "followOrbit" : "orbit";
-  state.orbitRadius = THREE.MathUtils.clamp(state.orbitRadius + event.deltaY * 0.035, 2.2, 180);
-  applyOrbitCamera(true);
+  const zoomDelta = event.deltaY * 0.035;
+  if (state.cameraMode === "follow" || state.cameraMode === "followOrbit") {
+    const target = state.followId && state.meshes.has(state.followId)
+      ? state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0))
+      : roadCenterTarget();
+    syncOrbitFromTarget(target);
+    state.cameraMode = "followOrbit";
+    state.orbitRadius = THREE.MathUtils.clamp(state.orbitRadius + zoomDelta, 2.2, 180);
+    applyOrbitCamera(true);
+    return;
+  }
+  // Default zoom never changes the orbit center. It zooms toward/away from the
+  // moving focus target (furthest car), so wheel scrolling does not throw the
+  // camera to a random raycast point.
+  state.autoOrbitRadius = THREE.MathUtils.clamp(state.autoOrbitRadius + zoomDelta, 5, 180);
+  state.cameraMode = "auto";
 }, { passive: false });
 
 function makeRoad(road) {
@@ -129,13 +146,13 @@ function makeRoad(road) {
   geom.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
   geom.setIndex(indices);
   geom.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x303a27, roughness: 0.92, metalness: 0.02, side: THREE.DoubleSide });
+  const mat = new THREE.MeshStandardMaterial({ color: 0x243022, roughness: 0.94, metalness: 0.02, side: THREE.DoubleSide });
   state.roadMesh = new THREE.Mesh(geom, mat);
   state.roadMesh.receiveShadow = true;
   scene.add(state.roadMesh);
 
   const linePts = road.samples.map(([x, y]) => new THREE.Vector3(x, y + 0.02, -half - 0.05));
-  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), new THREE.LineBasicMaterial({ color: 0x86efac }));
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), new THREE.LineBasicMaterial({ color: 0x22d3ee }));
   state.roadMesh.add(line);
 }
 
@@ -159,9 +176,9 @@ function makeCarMesh(gene) {
   body.castShadow = true;
   body.userData.carId = gene.id;
   group.add(body);
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x111827, roughness: 0.85 });
-  const hubMat = new THREE.MeshStandardMaterial({ color: 0xd1d5db, roughness: 0.5 });
-  const axleMat = new THREE.MeshStandardMaterial({ color: 0x6b7280, roughness: 0.6 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.88 });
+  const hubMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.45, metalness: 0.08 });
+  const axleMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.58, metalness: 0.04 });
   const wheelGroups = [];
   gene.wheels.forEach((w) => {
     const wheel = new THREE.Group();
@@ -224,6 +241,7 @@ function syncMeshes(data) {
 function updateMeshes(data) {
   syncMeshes(data);
   let bestX = 0;
+  let focusCar = null;
   data.cars.forEach((car) => {
     const mesh = state.meshes.get(car.id);
     if (!mesh) return;
@@ -231,6 +249,7 @@ function updateMeshes(data) {
     mesh.rotation.set(0, 0, car.theta);
     mesh.visible = true;
     bestX = Math.max(bestX, car.maxX);
+    if (!focusCar || car.maxX > focusCar.maxX) focusCar = car;
     const wheels = mesh.userData.wheelGroups || [];
     wheels.forEach((wheel, i) => {
       const local = wheel.userData.local;
@@ -238,7 +257,11 @@ function updateMeshes(data) {
       wheel.rotation.z = car.wheels[i]?.spin || 0;
     });
   });
-  state.followX = state.followX * 0.94 + Math.max(12, bestX + 10) * 0.06;
+  state.followX = state.followX * 0.94 + Math.max(12, bestX) * 0.06;
+  const desiredFocus = focusCar
+    ? new THREE.Vector3(focusCar.x + 1.5, focusCar.y + 1.6, focusCar.laneZ)
+    : new THREE.Vector3(Math.max(12, bestX), roadHeightAt(Math.max(12, bestX)) + 1.8, 0);
+  state.focusTarget.lerp(desiredFocus, 0.12);
 }
 
 function roadHeightAt(x) {
@@ -257,16 +280,7 @@ function roadHeightAt(x) {
 }
 
 function roadCenterTarget() {
-  if (state.roadMesh) {
-    raycaster.setFromCamera(new THREE.Vector2(0, 0), camera);
-    const hit = raycaster.intersectObject(state.roadMesh, true)[0];
-    if (hit) return new THREE.Vector3(hit.point.x, hit.point.y + 1.0, 0);
-  }
-  const dir = camera.getWorldDirection(new THREE.Vector3());
-  const t = Math.abs(dir.y) > 0.03 ? (roadHeightAt(camera.position.x) - camera.position.y) / dir.y : 18;
-  const distance = t > 0 ? THREE.MathUtils.clamp(t, 8, 60) : 18;
-  const x = camera.position.x + dir.x * distance;
-  return new THREE.Vector3(x, roadHeightAt(x) + 1.0, 0);
+  return state.focusTarget ? state.focusTarget.clone() : new THREE.Vector3(state.followX, roadHeightAt(state.followX) + 1.8, 0);
 }
 
 function cameraDirection() {
@@ -316,14 +330,26 @@ function applyOrbitCamera(instant = false) {
 }
 
 function beginOrbitDrag(event) {
-  const target = state.followId && state.meshes.has(state.followId)
-    ? state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0))
-    : roadCenterTarget();
+  if (state.followId && state.meshes.has(state.followId)) {
+    const target = state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    syncOrbitFromTarget(target);
+    state.cameraMode = "followOrbit";
+    return;
+  }
+  const target = roadCenterTarget();
   syncOrbitFromTarget(target);
-  state.cameraMode = state.followId ? "followOrbit" : "orbit";
+  state.autoOrbitYaw = state.orbitYaw;
+  state.autoOrbitPitch = state.orbitPitch;
+  state.autoOrbitRadius = state.orbitRadius;
+  state.cameraMode = "autoOrbit";
 }
 
 function updateOrbitFromDrag(dx, dy) {
+  if (state.cameraMode === "autoOrbit") {
+    state.autoOrbitYaw -= dx * 0.006;
+    state.autoOrbitPitch = THREE.MathUtils.clamp(state.autoOrbitPitch + dy * 0.0045, -1.25, 1.35);
+    return;
+  }
   state.orbitYaw -= dx * 0.006;
   state.orbitPitch = THREE.MathUtils.clamp(state.orbitPitch + dy * 0.0045, -1.25, 1.35);
   applyOrbitCamera(true);
@@ -392,12 +418,30 @@ function updateCamera(dt) {
     if (!state.dragging) applyOrbitCamera(false);
     return;
   }
+  if (state.cameraMode === "autoOrbit") {
+    const target = roadCenterTarget();
+    const cp = Math.cos(state.autoOrbitPitch);
+    const desired = target.clone().add(new THREE.Vector3(
+      cp * Math.cos(state.autoOrbitYaw),
+      Math.sin(state.autoOrbitPitch),
+      cp * Math.sin(state.autoOrbitYaw)
+    ).multiplyScalar(state.autoOrbitRadius));
+    camera.position.lerp(desired, 1 - Math.exp(-dt * 4.2));
+    camera.lookAt(target);
+    syncAnglesFromCamera(target);
+    return;
+  }
   if (state.cameraMode === "free") {
     updateFreeCamera(dt);
     return;
   }
-  const target = new THREE.Vector3(state.followX, 1.8, 0);
-  const desired = new THREE.Vector3(state.followX - 18, 11, 26);
+  const target = roadCenterTarget();
+  const cp = Math.cos(state.autoOrbitPitch);
+  const desired = target.clone().add(new THREE.Vector3(
+    cp * Math.cos(state.autoOrbitYaw),
+    Math.sin(state.autoOrbitPitch),
+    cp * Math.sin(state.autoOrbitYaw)
+  ).multiplyScalar(state.autoOrbitRadius));
   camera.position.lerp(desired, 1 - Math.exp(-dt * 3.5));
   camera.lookAt(target);
   syncAnglesFromCamera(target);
@@ -425,10 +469,10 @@ function svgForGene(gene, carState = null, large = false) {
   const score = carState ? `distance ${Math.max(0, carState.maxX - 4).toFixed(1)} | fitness ${carState.fitness.toFixed(1)}` : `uses ${Math.round(gene.used_power_fraction * 100)}% power`;
   return `<svg class="car-svg" viewBox="0 0 ${w} ${h}" role="img">
     <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#334155" stroke-width="2" stroke-dasharray="5 4" />
-    <polygon points="${pts}" fill="${gene.color}" stroke="#fff" stroke-width="1.6" opacity="0.9" />
+    <polygon points="${pts}" fill="${gene.color}" stroke="#f8fafc" stroke-width="1.6" opacity="0.92" />
     ${wheelSvg}
     <text x="10" y="16" fill="#94a3b8" font-size="${large ? 14 : 10}">${gene.id} · ${gene.lineage}</text>
-    <text x="10" y="${h - 8}" fill="#86efac" font-size="${large ? 14 : 10}">${score}</text>
+    <text x="10" y="${h - 8}" fill="#34d399" font-size="${large ? 14 : 10}">${score}</text>
   </svg>`;
 }
 
@@ -438,9 +482,9 @@ function reproductionClass(value = "") {
 
 function reproductionColor(value = "") {
   const cls = reproductionClass(value);
-  if (cls.includes("elite")) return "#3fb950";
-  if (cls.includes("copy")) return "#58a6ff";
-  if (cls.includes("crossover")) return "#d29922";
+  if (cls.includes("elite")) return "#34d399";
+  if (cls.includes("copy")) return "#22d3ee";
+  if (cls.includes("crossover")) return "#fbbf24";
   return "#94a3b8";
 }
 
@@ -461,7 +505,7 @@ function miniGenePreview(car) {
     return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111827" stroke="#e5e7eb" stroke-width="0.8" />`;
   }).join("");
   return `<g transform="translate(0,30)">
-    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#0b1220" stroke="#30363d" />
+    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#07111f" stroke="#334155" />
     <polygon points="${pts}" fill="${car.color}" stroke="#fff" stroke-width="0.9" opacity="0.92" />
     ${wheels}
   </g>`;
@@ -503,7 +547,7 @@ function updateGenealogy(data) {
     const cls = reproductionClass(e.reproduction);
     return `<path class="gene-edge ${cls}" d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" />`;
   }).join("");
-  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#8b949e" font-size="12">Gen ${gen.generation}</text>`).join("");
+  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#94a3b8" font-size="12" font-weight="700">Gen ${gen.generation}</text>`).join("");
   const nodeSvg = generations.flatMap((gen) => gen.cars.map((car, ci) => {
     const node = nodeById.get(car.id);
     const p = pos(node);
@@ -512,11 +556,11 @@ function updateGenealogy(data) {
     const title = `${car.id} · ${car.reproduction}\nfitness ${Number(car.fitness || 0).toFixed(1)}\nparents ${(car.parentIds || []).join(", ") || "none"}`;
     return `<g class="gene-node ${removed ? "removed" : ""}" data-gene-id="${car.id}" transform="translate(${p.x},${p.y})">
       <title>${title}</title>
-      <circle r="18" fill="${color}" stroke="#e6edf3" stroke-width="1.2" />
+      <circle r="18" fill="${color}" stroke="#f8fafc" stroke-width="1.2" />
       <text x="0" y="4" text-anchor="middle" fill="#0b1220" font-weight="700">${ci + 1}</text>
       <text x="25" y="-4">${car.id}</text>
       <text x="25" y="11" fill="#8b949e">${car.reproduction || car.lineage}</text>
-      <text x="25" y="26" fill="#86efac">fit ${Number(car.fitness || 0).toFixed(1)}</text>
+      <text x="25" y="26" fill="#34d399">fit ${Number(car.fitness || 0).toFixed(1)}</text>
       ${miniGenePreview(car)}
     </g>`;
   })).join("");
@@ -530,8 +574,12 @@ function updateGenealogy(data) {
 }
 
 function updateUI(data) {
-  $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
+  $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.autoEvolve ? "auto-evolving" : data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
   if ($("map-select") && data.road?.preset && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
+  if ($("auto-evolve")) {
+    $("auto-evolve").textContent = data.autoEvolve ? "Stop auto-run" : "Auto-run generations";
+    $("auto-evolve").classList.toggle("running", !!data.autoEvolve);
+  }
   const bestCar = [...data.cars].sort((a, b) => b.fitness - a.fitness)[0];
   $("best").textContent = bestCar ? `best ${bestCar.id}: ${bestCar.fitness.toFixed(1)} (${Math.max(0, bestCar.maxX - 4).toFixed(1)}m)` : "best: —";
   const list = $("cars-list");
@@ -584,6 +632,10 @@ $("start").addEventListener("click", () => fire(post("/api/start")));
 $("pause").addEventListener("click", () => fire(post("/api/pause")));
 $("randomize").addEventListener("click", () => fire(post("/api/randomize")));
 $("evolve").addEventListener("click", () => fire(post("/api/evolve", { elite_count: 2, copy_count: 1, mutation_rate: Number($("mutation").value) })));
+$("auto-evolve").addEventListener("click", () => {
+  const enabled = !(state.data?.autoEvolve);
+  fire(post("/api/auto-evolve", { enabled, elite_count: 2, copy_count: 1, mutation_rate: Number($("mutation").value) }));
+});
 $("speed").addEventListener("input", (event) => {
   const value = Number(event.target.value);
   $("speed-label").textContent = `${value.toFixed(value < 10 ? 2 : 0)}×`;

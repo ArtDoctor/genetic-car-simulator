@@ -211,6 +211,10 @@ class SimulationManager:
         self.genealogy: list[dict[str, Any]] = []
         self.cars: list[SimCar] = []
         self.running = False
+        self.auto_evolve = False
+        self.auto_elite_count = 2
+        self.auto_copy_count = 1
+        self.auto_mutation_rate = 0.22
         self.sim_time = 0.0
         self.speed = 1.0
         self.stall_seconds = 3.5
@@ -282,8 +286,12 @@ class SimulationManager:
                     for car in self.cars:
                         car.step(self.road, step_dt, self.sim_time, self.stall_seconds, self.max_time)
                 if all(car.done for car in self.cars):
-                    self.running = False
                     self._finalize_scores()
+                    if self.auto_evolve:
+                        self._evolve_locked(self.auto_elite_count, self.auto_copy_count, self.auto_mutation_rate)
+                        self.running = True
+                    else:
+                        self.running = False
 
     def _finalize_scores(self) -> None:
         for car in self.cars:
@@ -292,8 +300,23 @@ class SimulationManager:
             car.gene.time_alive = round(self.sim_time, 3) if car.gene.time_alive == 0 else car.gene.time_alive
         self._record_generation()
 
+    def _evolve_locked(self, elite_count: int = 2, copy_count: int = 1, mutation_rate: float = 0.22) -> None:
+        self.generation += 1
+        self._last_seed += 1
+        self.population = evolve_population(
+            self.population,
+            generation=self.generation,
+            seed=self._last_seed,
+            elite_count=elite_count,
+            copy_count=copy_count,
+            mutation_rate=mutation_rate,
+        )
+        self._record_generation()
+        self.reset_cars()
+
     async def start(self) -> None:
         async with self._lock:
+            self.auto_evolve = False
             self.reset_cars()
             self._record_generation()
             self.running = True
@@ -302,6 +325,8 @@ class SimulationManager:
     async def pause(self, value: bool) -> None:
         async with self._lock:
             self.running = not value
+            if value:
+                self.auto_evolve = False
 
     async def set_speed(self, speed: float) -> None:
         async with self._lock:
@@ -314,6 +339,7 @@ class SimulationManager:
             self.population = random_population(generation=0, seed=self._last_seed)
             self.genealogy = []
             self.running = False
+            self.auto_evolve = False
             self._record_generation()
             self.reset_cars()
 
@@ -324,25 +350,39 @@ class SimulationManager:
             road_seed = self.road.seed if seed is None else seed
             self.road = Road(seed=road_seed, preset=preset)
             self.running = False
+            self.auto_evolve = False
             self.reset_cars()
             self._record_generation()
 
     async def evolve(self, elite_count: int = 2, copy_count: int = 1, mutation_rate: float = 0.22) -> None:
         async with self._lock:
             self._finalize_scores()
-            self.generation += 1
-            self._last_seed += 1
-            self.population = evolve_population(
-                self.population,
-                generation=self.generation,
-                seed=self._last_seed,
-                elite_count=elite_count,
-                copy_count=copy_count,
-                mutation_rate=mutation_rate,
-            )
+            self._evolve_locked(elite_count, copy_count, mutation_rate)
             self.running = False
-            self._record_generation()
-            self.reset_cars()
+            self.auto_evolve = False
+
+    async def set_auto_evolve(
+        self,
+        enabled: bool,
+        elite_count: int = 2,
+        copy_count: int = 1,
+        mutation_rate: float = 0.22,
+    ) -> None:
+        async with self._lock:
+            self.auto_evolve = enabled
+            self.auto_elite_count = elite_count
+            self.auto_copy_count = copy_count
+            self.auto_mutation_rate = mutation_rate
+            if enabled:
+                if all(car.done for car in self.cars):
+                    self._finalize_scores()
+                    self._evolve_locked(elite_count, copy_count, mutation_rate)
+                elif not self.running:
+                    self.reset_cars()
+                    self._record_generation()
+                self.running = True
+            else:
+                self.running = False
 
     async def random_car(self, seed: int | None = None) -> CarGene:
         rng = random.Random(seed if seed is not None else time.time_ns())
@@ -354,6 +394,7 @@ class SimulationManager:
             return {
                 "generation": self.generation,
                 "running": self.running,
+                "autoEvolve": self.auto_evolve,
                 "simTime": self.sim_time,
                 "speed": self.speed,
                 "stallSeconds": self.stall_seconds,
