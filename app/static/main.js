@@ -30,6 +30,7 @@ const state = {
   lastSnapshotSimTime: null,
   lastRoadKey: null,
   activeTab: "sim",
+  sessionId: null,
 };
 
 const viewport = $("viewport");
@@ -536,17 +537,61 @@ function render() {
 }
 render();
 
+function svgGeneLayout(gene, large = false) {
+  const width = large ? 420 : 260;
+  const height = large ? 340 : 78;
+  const plot = {
+    left: large ? 24 : 12,
+    right: width - (large ? 24 : 12),
+    top: large ? 42 : 22,
+    bottom: height - (large ? 54 : 19),
+  };
+  const xs = [];
+  const ys = [];
+  (gene.body || []).forEach(([x, y]) => {
+    xs.push(x);
+    ys.push(y);
+  });
+  (gene.wheels || []).forEach((wheel) => {
+    xs.push(wheel.x - wheel.radius, wheel.x + wheel.radius);
+    ys.push(wheel.y - wheel.radius, wheel.y + wheel.radius);
+  });
+  const minX = Math.min(...xs, -1);
+  const maxX = Math.max(...xs, 1);
+  const minY = Math.min(...ys, -0.8);
+  const maxY = Math.max(...ys, 0.8);
+  const spanX = Math.max(0.1, maxX - minX);
+  const spanY = Math.max(0.1, maxY - minY);
+  // Use one uniform pixels-per-world-unit scale for x, y, and wheel radius.
+  // The simulator renders the same unwarped coordinates; the old random-lab SVG
+  // used different x/y scales, which made valid wheels look like they overlapped.
+  const scale = Math.min((plot.right - plot.left) / spanX, (plot.bottom - plot.top) / spanY) * 0.96;
+  const centerX = (minX + maxX) / 2;
+  const centerY = (minY + maxY) / 2;
+  const screenCenterX = (plot.left + plot.right) / 2;
+  const screenCenterY = (plot.top + plot.bottom) / 2;
+  return {
+    width,
+    height,
+    plot,
+    scale,
+    x: (value) => screenCenterX + (value - centerX) * scale,
+    y: (value) => screenCenterY - (value - centerY) * scale,
+  };
+}
+
 function svgForGene(gene, carState = null, large = false) {
-  const pts = gene.body.map(([x, y]) => `${100 + x * 45},${large ? 170 - y * 75 : 40 - y * 28}`).join(" ");
+  const layout = svgGeneLayout(gene, large);
+  const pts = gene.body.map(([x, y]) => `${layout.x(x).toFixed(1)},${layout.y(y).toFixed(1)}`).join(" ");
   const wheelSvg = gene.wheels.map((w) => {
-    const cx = 100 + w.x * 45;
-    const cy = large ? 170 - w.y * 75 : 40 - w.y * 28;
-    const r = w.radius * (large ? 75 : 28);
-    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
+    const cx = layout.x(w.x);
+    const cy = layout.y(w.y);
+    const r = w.radius * layout.scale;
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
   }).join("");
-  const w = large ? 420 : 260;
-  const h = large ? 340 : 78;
-  const yLine = large ? 250 : 64;
+  const w = layout.width;
+  const h = layout.height;
+  const yLine = Math.min(layout.plot.bottom + (large ? 16 : 6), h - (large ? 34 : 14));
   const score = carState ? `distance ${Math.max(0, carState.maxX - 4).toFixed(1)} | fitness ${carState.fitness.toFixed(1)}` : `uses ${Math.round(gene.used_power_fraction * 100)}% power`;
   return `<svg class="car-svg" viewBox="0 0 ${w} ${h}" role="img">
     <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#525252" stroke-width="2" stroke-dasharray="5 4" />
@@ -679,7 +724,8 @@ function updateUI(data) {
 
 function connectWs() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${location.host}/ws/sim`);
+  const sessionQuery = state.sessionId ? `?session=${encodeURIComponent(state.sessionId)}` : "";
+  const ws = new WebSocket(`${protocol}://${location.host}/ws/sim${sessionQuery}`);
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     state.data = data;
@@ -694,10 +740,16 @@ function connectWs() {
   };
   ws.onclose = () => setTimeout(connectWs, 1000);
 }
-connectWs();
+
+async function initSession() {
+  const res = await fetch("/api/session", { method: "POST", credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  state.sessionId = data.sessionId;
+}
 
 async function post(url, body) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -741,9 +793,22 @@ $("tab-random").addEventListener("click", () => setTab("random"));
 $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
 
 async function generateOne() {
-  const gene = await (await fetch(`/api/random-car?seed=${Date.now()}`)).json();
+  const res = await fetch(`/api/random-car?seed=${Date.now()}`, { credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const gene = await res.json();
   $("random-svg").innerHTML = svgForGene(gene, null, true);
   $("random-json").textContent = JSON.stringify(gene, null, 2);
 }
-$("generate-one").addEventListener("click", generateOne);
-generateOne();
+$("generate-one").addEventListener("click", () => fire(generateOne()));
+
+async function boot() {
+  try {
+    await initSession();
+    connectWs();
+    await generateOne();
+  } catch (err) {
+    console.error(err);
+    $("status").textContent = `session setup failed: ${err.message || err}`;
+  }
+}
+boot();

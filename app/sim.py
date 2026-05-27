@@ -4,6 +4,7 @@ import asyncio
 import math
 import random
 import time
+from contextlib import suppress
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -270,6 +271,13 @@ class SimulationManager:
     async def ensure_loop(self) -> None:
         if self._task is None or self._task.done():
             self._task = asyncio.create_task(self._loop())
+
+    async def close(self) -> None:
+        if self._task is not None and not self._task.done():
+            self._task.cancel()
+            with suppress(asyncio.CancelledError):
+                await self._task
+        self._task = None
 
     async def _loop(self) -> None:
         base_dt = 1.0 / 60.0
