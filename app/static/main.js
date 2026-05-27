@@ -542,18 +542,18 @@ function svgForGene(gene, carState = null, large = false) {
     const cx = 100 + w.x * 45;
     const cy = large ? 170 - w.y * 75 : 40 - w.y * 28;
     const r = w.radius * (large ? 75 : 28);
-    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#111827" stroke="#e5e7eb" stroke-width="2"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
+    return `<circle cx="${cx}" cy="${cy}" r="${r}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx}" y="${cy + 4}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
   }).join("");
   const w = large ? 420 : 260;
   const h = large ? 340 : 78;
   const yLine = large ? 250 : 64;
   const score = carState ? `distance ${Math.max(0, carState.maxX - 4).toFixed(1)} | fitness ${carState.fitness.toFixed(1)}` : `uses ${Math.round(gene.used_power_fraction * 100)}% power`;
   return `<svg class="car-svg" viewBox="0 0 ${w} ${h}" role="img">
-    <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#334155" stroke-width="2" stroke-dasharray="5 4" />
+    <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#525252" stroke-width="2" stroke-dasharray="5 4" />
     <polygon points="${pts}" fill="${gene.color}" stroke="#f8fafc" stroke-width="1.6" opacity="0.92" />
     ${wheelSvg}
-    <text x="10" y="16" fill="#94a3b8" font-size="${large ? 14 : 10}">${gene.id} · ${gene.lineage}</text>
-    <text x="10" y="${h - 8}" fill="#34d399" font-size="${large ? 14 : 10}">${score}</text>
+    <text x="10" y="16" fill="#a3a3a3" font-size="${large ? 14 : 10}">${gene.id} · ${gene.lineage}</text>
+    <text x="10" y="${h - 8}" fill="#e5e5e5" font-size="${large ? 14 : 10}">${score}</text>
   </svg>`;
 }
 
@@ -563,10 +563,10 @@ function reproductionClass(value = "") {
 
 function reproductionColor(value = "") {
   const cls = reproductionClass(value);
-  if (cls.includes("elite")) return "#34d399";
-  if (cls.includes("copy")) return "#22d3ee";
-  if (cls.includes("crossover")) return "#fbbf24";
-  return "#94a3b8";
+  if (cls.includes("elite")) return "#f5f5f5";
+  if (cls.includes("copy")) return "#d4d4d4";
+  if (cls.includes("crossover")) return "#a3a3a3";
+  return "#737373";
 }
 
 function miniGenePreview(car) {
@@ -583,10 +583,10 @@ function miniGenePreview(car) {
     const x = (w.x - cx) * scale;
     const y = -(w.y - cy) * scale;
     const r = Math.max(2.2, w.radius * scale);
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111827" stroke="#e5e7eb" stroke-width="0.8" />`;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="0.8" />`;
   }).join("");
   return `<g transform="translate(0,30)">
-    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#07111f" stroke="#334155" />
+    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#111111" stroke="#525252" />
     <polygon points="${pts}" fill="${car.color}" stroke="#fff" stroke-width="0.9" opacity="0.92" />
     ${wheels}
   </g>`;
@@ -628,7 +628,7 @@ function updateGenealogy(data) {
     const cls = reproductionClass(e.reproduction);
     return `<path class="gene-edge ${cls}" d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" />`;
   }).join("");
-  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#94a3b8" font-size="12" font-weight="700">Gen ${gen.generation}</text>`).join("");
+  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#a3a3a3" font-size="12" font-weight="700">Gen ${gen.generation}</text>`).join("");
   const nodeSvg = generations.flatMap((gen) => gen.cars.map((car, ci) => {
     const node = nodeById.get(car.id);
     const p = pos(node);
@@ -638,10 +638,10 @@ function updateGenealogy(data) {
     return `<g class="gene-node ${removed ? "removed" : ""}" data-gene-id="${car.id}" transform="translate(${p.x},${p.y})">
       <title>${title}</title>
       <circle r="18" fill="${color}" stroke="#f8fafc" stroke-width="1.2" />
-      <text x="0" y="4" text-anchor="middle" fill="#0b1220" font-weight="700">${ci + 1}</text>
+      <text x="0" y="4" text-anchor="middle" fill="#050505" font-weight="700">${ci + 1}</text>
       <text x="25" y="-4">${car.id}</text>
-      <text x="25" y="11" fill="#8b949e">${car.reproduction || car.lineage}</text>
-      <text x="25" y="26" fill="#34d399">fit ${Number(car.fitness || 0).toFixed(1)}</text>
+      <text x="25" y="11" fill="#a3a3a3">${car.reproduction || car.lineage}</text>
+      <text x="25" y="26" fill="#e5e5e5">fit ${Number(car.fitness || 0).toFixed(1)}</text>
       ${miniGenePreview(car)}
     </g>`;
   })).join("");
