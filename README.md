@@ -22,13 +22,13 @@ pip install -r requirements.txt
 python -m app.server
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:18473>.
 
 ## Run with Docker
 
 ```bash
 docker build -t genetic-car-simulator .
-docker run --rm -p 8000:8000 genetic-car-simulator
+docker run --rm -p 18473:18473 genetic-car-simulator
 ```
 
 Or with Docker Compose:
@@ -37,7 +37,7 @@ Or with Docker Compose:
 docker compose up --build
 ```
 
-Open <http://localhost:8000>.
+Open <http://localhost:18473>.
 
 ## Controls
 

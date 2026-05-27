@@ -2,7 +2,7 @@ FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
-    PORT=8000
+    PORT=18473
 
 WORKDIR /app
 
@@ -16,6 +16,6 @@ COPY app ./app
 RUN chown -R appuser:appuser /app
 USER appuser
 
-EXPOSE 8000
+EXPOSE 18473
 
-CMD ["sh", "-c", "uvicorn app.server:app --host 0.0.0.0 --port ${PORT:-8000}"]
+CMD ["sh", "-c", "uvicorn app.server:app --host 0.0.0.0 --port ${PORT:-18473}"]
