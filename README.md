@@ -5,6 +5,7 @@ A browser-controlled simulator for evolving simple 3D cars over a fixed ragged r
 - Python owns genes, random car generation, crossover/elitism/copying/mutation, road generation, and toy physics evaluation.
 - The browser visualizes the simulation in 3D and shows each car's 2D body projection plus full gene JSON.
 - A separate **Random car lab** tab generates standalone random car genes.
+- A persistent **Leaderboard** tab stores the top 10 cars per map, with one best entry per visitor.
 
 ## Run locally
 
@@ -28,7 +29,7 @@ Open <http://localhost:18473>.
 
 ```bash
 docker build -t genetic-car-simulator .
-docker run --rm -p 18473:18473 genetic-car-simulator
+docker run --rm -p 18473:18473 -v genetic-car-leaderboard:/app/data genetic-car-simulator
 ```
 
 Or with Docker Compose:
@@ -38,6 +39,13 @@ docker compose up --build
 ```
 
 Open <http://localhost:18473>.
+
+## Persistence and limits
+
+- Leaderboard records are stored in `/app/data/leaderboard.json` by default. On Coolify, add persistent storage for `/app/data` so records survive redeploys/restarts.
+- Override with `LEADERBOARD_FILE=/path/to/leaderboard.json` if needed.
+- Idle sessions expire after 24 hours by default: `SESSION_TTL_SECONDS=86400`.
+- Concurrent running simulations default to about 60% of CPU cores. Override with `SIM_MAX_RUNNING=4`.
 
 ## Controls
 

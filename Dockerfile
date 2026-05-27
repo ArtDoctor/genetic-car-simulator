@@ -12,9 +12,12 @@ COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
 COPY app ./app
+RUN mkdir -p /app/data
 
 RUN chown -R appuser:appuser /app
 USER appuser
+
+VOLUME ["/app/data"]
 
 EXPOSE 18473
 

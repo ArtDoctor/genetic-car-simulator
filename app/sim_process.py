@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import multiprocessing as mp
+import os
 import queue
 import time
 import traceback
@@ -13,6 +14,14 @@ from .sim import SimulationManager
 
 COMMAND_TIMEOUT_SECONDS = 15.0
 SHUTDOWN_TIMEOUT_SECONDS = 3.0
+DEFAULT_MAX_RUNNING_SIMULATIONS = max(1, int((os.cpu_count() or 1) * 0.6))
+MAX_RUNNING_SIMULATIONS = max(1, int(os.getenv("SIM_MAX_RUNNING", str(DEFAULT_MAX_RUNNING_SIMULATIONS))))
+SIM_SLOT_WAIT_SECONDS = float(os.getenv("SIM_SLOT_WAIT_SECONDS", "0.25"))
+_running_slots = asyncio.BoundedSemaphore(MAX_RUNNING_SIMULATIONS)
+
+
+class SimulationCapacityError(RuntimeError):
+    pass
 
 
 def _multiprocessing_context() -> BaseContext:
@@ -60,9 +69,8 @@ async def _worker_loop(command_queue: mp.Queue, response_queue: mp.Queue) -> Non
     try:
         while True:
             try:
-                request_id, command, args, kwargs = command_queue.get_nowait()
+                request_id, command, args, kwargs = await asyncio.to_thread(command_queue.get, True, 0.1)
             except queue.Empty:
-                await asyncio.sleep(0.005)
                 continue
 
             if command == "__close__":
@@ -91,6 +99,7 @@ class SimulationProcess:
         self._response_queue: mp.Queue | None = None
         self._process: mp.Process | None = None
         self._call_lock = asyncio.Lock()
+        self._has_running_slot = False
         self._start_process()
 
     def _start_process(self) -> None:
@@ -105,8 +114,29 @@ class SimulationProcess:
 
     async def ensure_loop(self) -> None:
         if self._process is None or not self._process.is_alive():
+            self._release_running_slot()
             await self.close()
             self._start_process()
+
+    def _release_running_slot(self) -> None:
+        if self._has_running_slot:
+            self._has_running_slot = False
+            _running_slots.release()
+
+    async def _acquire_running_slot(self) -> None:
+        if self._has_running_slot:
+            return
+        try:
+            await asyncio.wait_for(_running_slots.acquire(), timeout=SIM_SLOT_WAIT_SECONDS)
+        except asyncio.TimeoutError as exc:
+            raise SimulationCapacityError(
+                f"server is already running {MAX_RUNNING_SIMULATIONS} simulations; try again in a moment"
+            ) from exc
+        self._has_running_slot = True
+
+    def _sync_slot_from_snapshot(self, snapshot: dict[str, Any]) -> None:
+        if self._has_running_slot and not snapshot.get("running") and not snapshot.get("autoEvolve"):
+            self._release_running_slot()
 
     async def _call(self, command: str, *args: Any, timeout: float = COMMAND_TIMEOUT_SECONDS, **kwargs: Any) -> Any:
         await self.ensure_loop()
@@ -135,6 +165,7 @@ class SimulationProcess:
                 raise RuntimeError(payload)
 
     async def close(self) -> None:
+        self._release_running_slot()
         process = self._process
         command_queue = self._command_queue
         response_queue = self._response_queue
@@ -166,7 +197,9 @@ class SimulationProcess:
                 q.join_thread()
 
     async def snapshot(self) -> dict[str, Any]:
-        return await self._call("snapshot")
+        snapshot = await self._call("snapshot")
+        self._sync_slot_from_snapshot(snapshot)
+        return snapshot
 
     async def road(self) -> dict[str, Any]:
         return await self._call("road")
@@ -175,22 +208,39 @@ class SimulationProcess:
         return await self._call("random_car", seed=seed)
 
     async def start(self) -> None:
-        await self._call("start")
+        await self._acquire_running_slot()
+        try:
+            await self._call("start")
+        except BaseException:
+            self._release_running_slot()
+            raise
 
     async def pause(self, value: bool) -> None:
-        await self._call("pause", value)
+        if not value:
+            await self._acquire_running_slot()
+        try:
+            await self._call("pause", value)
+        except BaseException:
+            if not value:
+                self._release_running_slot()
+            raise
+        if value:
+            self._release_running_slot()
 
     async def set_speed(self, speed: float) -> None:
         await self._call("set_speed", speed)
 
     async def randomize(self, seed: int | None = None) -> None:
         await self._call("randomize", seed=seed)
+        self._release_running_slot()
 
     async def set_map(self, preset: str, seed: int | None = None) -> None:
         await self._call("set_map", preset, seed)
+        self._release_running_slot()
 
     async def evolve(self, elite_count: int = 2, copy_count: int = 1, mutation_rate: float = 0.22) -> None:
         await self._call("evolve", elite_count, copy_count, mutation_rate)
+        self._release_running_slot()
 
     async def set_auto_evolve(
         self,
@@ -199,4 +249,13 @@ class SimulationProcess:
         copy_count: int = 1,
         mutation_rate: float = 0.22,
     ) -> None:
-        await self._call("set_auto_evolve", enabled, elite_count, copy_count, mutation_rate)
+        if enabled:
+            await self._acquire_running_slot()
+        try:
+            await self._call("set_auto_evolve", enabled, elite_count, copy_count, mutation_rate)
+        except BaseException:
+            if enabled:
+                self._release_running_slot()
+            raise
+        if not enabled:
+            self._release_running_slot()

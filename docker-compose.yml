@@ -6,4 +6,10 @@ services:
       - "18473:18473"
     environment:
       PORT: 18473
+      LEADERBOARD_FILE: /app/data/leaderboard.json
+    volumes:
+      - leaderboard-data:/app/data
     restart: unless-stopped
+
+volumes:
+  leaderboard-data:

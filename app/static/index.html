@@ -28,6 +28,7 @@
         <button id="tab-sim" class="active">Simulation</button>
         <button id="tab-random">Random lab</button>
         <button id="tab-genealogy">Genealogy</button>
+        <button id="tab-leaderboard">Leaderboard</button>
       </nav>
     </header>
 
@@ -101,6 +102,19 @@
           <p class="small-note">Grey faded nodes have no children in the next generation.</p>
           <pre id="genealogy-details">Click a node in the tree.</pre>
         </aside>
+      </section>
+    </main>
+
+    <main id="leaderboard-view" class="view">
+      <section class="leaderboard-layout">
+        <div class="card leaderboard-card">
+          <div class="card-heading">
+            <span class="eyebrow">Global records</span>
+            <h2>Top cars per map</h2>
+          </div>
+          <p>Each visitor can hold one best record per map. The server keeps the top 10 and stores them persistently.</p>
+          <div id="leaderboard-list" class="leaderboard-list">Loading leaderboard…</div>
+        </div>
       </section>
     </main>
 

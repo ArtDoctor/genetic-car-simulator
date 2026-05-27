@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
 import time
 from contextlib import asynccontextmanager, suppress
@@ -10,17 +11,18 @@ from secrets import token_urlsafe
 from typing import Any
 
 from fastapi import Depends, FastAPI, Request, Response, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from .sim_process import SimulationProcess
+from .leaderboard import LeaderboardStore
+from .sim_process import MAX_RUNNING_SIMULATIONS, SimulationCapacityError, SimulationProcess
 
 ROOT = Path(__file__).resolve().parent
 STATIC = ROOT / "static"
 SESSION_COOKIE_NAME = "gcs_session"
-SESSION_TTL_SECONDS = 2 * 60 * 60
-SESSION_CLEANUP_SECONDS = 5 * 60
+SESSION_TTL_SECONDS = int(os.getenv("SESSION_TTL_SECONDS", str(24 * 60 * 60)))
+SESSION_CLEANUP_SECONDS = int(os.getenv("SESSION_CLEANUP_SECONDS", str(10 * 60)))
 SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 
 
@@ -28,6 +30,7 @@ SESSION_ID_RE = re.compile(r"^[A-Za-z0-9_-]{16,128}$")
 class SessionEntry:
     manager: SimulationProcess
     last_seen: float
+    active_websockets: int = 0
 
 
 class SessionStore:
@@ -103,6 +106,27 @@ class SessionStore:
             if entry is not None:
                 entry.last_seen = time.time()
 
+    async def websocket_connected(self, session_id: str) -> None:
+        async with self._lock:
+            entry = self._sessions.get(session_id)
+            if entry is not None:
+                entry.active_websockets += 1
+                entry.last_seen = time.time()
+
+    async def websocket_disconnected(self, session_id: str) -> None:
+        manager_to_pause: SimulationProcess | None = None
+        async with self._lock:
+            entry = self._sessions.get(session_id)
+            if entry is not None:
+                entry.active_websockets = max(0, entry.active_websockets - 1)
+                entry.last_seen = time.time()
+                if entry.active_websockets == 0:
+                    manager_to_pause = entry.manager
+
+        if manager_to_pause is not None:
+            with suppress(Exception):
+                await manager_to_pause.pause(True)
+
     async def cleanup_once(self) -> None:
         cutoff = time.time() - SESSION_TTL_SECONDS
         expired: list[SessionEntry] = []
@@ -128,6 +152,7 @@ class SessionStore:
 
 
 sessions = SessionStore()
+leaderboard = LeaderboardStore()
 
 
 @asynccontextmanager
@@ -145,6 +170,14 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(title="Genetic Car Simulator Prototype", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
+
+
+@app.exception_handler(SimulationCapacityError)
+async def simulation_capacity_error(_: Request, exc: SimulationCapacityError) -> JSONResponse:
+    return JSONResponse(
+        status_code=429,
+        content={"detail": str(exc), "maxRunningSimulations": MAX_RUNNING_SIMULATIONS},
+    )
 
 
 class SpeedPayload(BaseModel):
@@ -193,6 +226,11 @@ async def state(manager: SimulationProcess = Depends(current_manager)) -> dict[s
 @app.get("/api/road")
 async def road(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     return await manager.road()
+
+
+@app.get("/api/leaderboard")
+async def leaderboard_state() -> dict[str, Any]:
+    return await leaderboard.snapshot()
 
 
 @app.get("/api/random-car")
@@ -252,17 +290,28 @@ async def auto_evolve(payload: AutoEvolvePayload, manager: SimulationProcess = D
 async def sim_ws(websocket: WebSocket) -> None:
     session_id, manager = await sessions.get_for_websocket(websocket)
     await websocket.accept()
+    await sessions.websocket_connected(session_id)
     last_touch = 0.0
+    last_leaderboard_record = 0.0
     try:
         while True:
             now = time.time()
             if now - last_touch > 5.0:
                 await sessions.touch(session_id)
                 last_touch = now
-            await websocket.send_json(await manager.snapshot())
+            snapshot = await manager.snapshot()
+            if now - last_leaderboard_record > 2.0:
+                with suppress(Exception):
+                    await leaderboard.record_snapshot(session_id, snapshot)
+                last_leaderboard_record = now
+            await websocket.send_json(snapshot)
             await asyncio.sleep(1 / 30)
     except WebSocketDisconnect:
         return
+    except Exception:
+        return
+    finally:
+        await sessions.websocket_disconnected(session_id)
 
 
 if __name__ == "__main__":

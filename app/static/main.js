@@ -31,6 +31,7 @@ const state = {
   lastRoadKey: null,
   activeTab: "sim",
   sessionId: null,
+  leaderboardLoadedAt: 0,
 };
 
 const viewport = $("viewport");
@@ -699,6 +700,45 @@ function updateGenealogy(data) {
   });
 }
 
+function timeAgo(timestampSeconds) {
+  if (!timestampSeconds) return "unknown";
+  const seconds = Math.max(0, Date.now() / 1000 - timestampSeconds);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+async function refreshLeaderboard(force = false) {
+  const holder = $("leaderboard-list");
+  if (!holder) return;
+  const now = performance.now();
+  if (!force && state.leaderboardLoadedAt && now - state.leaderboardLoadedAt < 5000) return;
+  holder.textContent = "Loading leaderboard…";
+  const res = await fetch("/api/leaderboard", { credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  state.leaderboardLoadedAt = now;
+  holder.innerHTML = (data.maps || []).map((map) => {
+    const entries = map.entries || [];
+    const rows = entries.length ? entries.map((entry, index) => `
+      <article class="leaderboard-entry">
+        <div class="leaderboard-rank">#${index + 1}</div>
+        <div class="leaderboard-preview">${svgForGene(entry.gene, null, false)}</div>
+        <div class="leaderboard-meta">
+          <strong>${entry.displayName || "visitor"}</strong>
+          <span>fitness ${Number(entry.fitness || 0).toFixed(1)} · distance ${Number(entry.distance || 0).toFixed(1)}m · gen ${entry.generation ?? 0}</span>
+          <span>${entry.carId || "car"} · ${timeAgo(entry.recordedAt)}</span>
+        </div>
+      </article>
+    `).join("") : `<p class="small-note">No records yet for this map.</p>`;
+    return `<section class="leaderboard-map">
+      <div class="leaderboard-map-heading"><h3>${map.label}</h3><span>${entries.length}/10 records</span></div>
+      ${rows}
+    </section>`;
+  }).join("");
+}
+
 function updateUI(data) {
   $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.autoEvolve ? "auto-evolving" : data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
   if ($("map-select") && data.road?.preset && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
@@ -782,15 +822,19 @@ function setTab(name) {
   $("simulation-view").classList.toggle("active", name === "sim");
   $("random-view").classList.toggle("active", name === "random");
   $("genealogy-view").classList.toggle("active", name === "genealogy");
+  $("leaderboard-view").classList.toggle("active", name === "leaderboard");
   $("tab-sim").classList.toggle("active", name === "sim");
   $("tab-random").classList.toggle("active", name === "random");
   $("tab-genealogy").classList.toggle("active", name === "genealogy");
+  $("tab-leaderboard").classList.toggle("active", name === "leaderboard");
   if (name === "genealogy" && state.data) updateGenealogy(state.data);
+  if (name === "leaderboard") fire(refreshLeaderboard(true));
   setTimeout(resize, 0);
 }
 $("tab-sim").addEventListener("click", () => setTab("sim"));
 $("tab-random").addEventListener("click", () => setTab("random"));
 $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
+$("tab-leaderboard").addEventListener("click", () => setTab("leaderboard"));
 
 async function generateOne() {
   const res = await fetch(`/api/random-car?seed=${Date.now()}`, { credentials: "same-origin" });
