@@ -121,7 +121,7 @@ async def sim_ws(websocket: WebSocket) -> None:
     try:
         while True:
             await websocket.send_json(await manager.snapshot())
-            await asyncio.sleep(1 / 24)
+            await asyncio.sleep(1 / 30)
     except WebSocketDisconnect:
         return
 

@@ -24,6 +24,12 @@ const state = {
   orbitPitch: 0.35,
   orbitRadius: 28,
   keys: new Set(),
+  carTracks: new Map(),
+  lastSnapshotAt: 0,
+  lastSnapshotGeneration: null,
+  lastSnapshotSimTime: null,
+  lastRoadKey: null,
+  activeTab: "sim",
 };
 
 const viewport = $("viewport");
@@ -32,7 +38,8 @@ scene.background = new THREE.Color(0x050816);
 scene.fog = new THREE.Fog(0x050816, 72, 220);
 const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+const MAX_PIXEL_RATIO = 1.5;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
 renderer.shadowMap.enabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -56,7 +63,7 @@ camera.position.set(-6, 9, 20);
 
 function resize() {
   const rect = viewport.getBoundingClientRect();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
   renderer.setSize(rect.width, rect.height);
   camera.aspect = rect.width / Math.max(1, rect.height);
   camera.updateProjectionMatrix();
@@ -238,13 +245,84 @@ function syncMeshes(data) {
   });
 }
 
-function updateMeshes(data) {
+function copyCarState(car) {
+  return {
+    ...car,
+    wheels: (car.wheels || []).map((wheel) => ({ ...wheel })),
+  };
+}
+
+function lerpAngle(a, b, t) {
+  const delta = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  return a + delta * t;
+}
+
+function interpolateCar(a, b, t) {
+  if (!a) return copyCarState(b);
+  const wheels = (b.wheels || []).map((wheel, i) => ({
+    ...wheel,
+    spin: THREE.MathUtils.lerp(a.wheels?.[i]?.spin ?? wheel.spin ?? 0, wheel.spin ?? 0, t),
+  }));
+  return {
+    ...b,
+    x: THREE.MathUtils.lerp(a.x, b.x, t),
+    y: THREE.MathUtils.lerp(a.y, b.y, t),
+    laneZ: THREE.MathUtils.lerp(a.laneZ, b.laneZ, t),
+    theta: lerpAngle(a.theta, b.theta, t),
+    maxX: THREE.MathUtils.lerp(a.maxX, b.maxX, t),
+    fitness: THREE.MathUtils.lerp(a.fitness, b.fitness, t),
+    wheels,
+  };
+}
+
+function sampleCarTrack(track, nowSeconds) {
+  if (!track) return null;
+  const t = track.duration > 0 ? THREE.MathUtils.clamp((nowSeconds - track.start) / track.duration, 0, 1) : 1;
+  return interpolateCar(track.from, track.to, t);
+}
+
+function ingestSnapshot(data) {
   syncMeshes(data);
+  const now = performance.now() / 1000;
+  const roadKey = `${data.road?.seed ?? ""}:${data.road?.preset ?? ""}`;
+  const shouldSnap =
+    !state.lastSnapshotAt ||
+    data.generation !== state.lastSnapshotGeneration ||
+    data.simTime < (state.lastSnapshotSimTime ?? data.simTime) - 0.05 ||
+    (state.lastRoadKey && roadKey !== state.lastRoadKey);
+  const elapsed = state.lastSnapshotAt ? now - state.lastSnapshotAt : 1 / 24;
+  const duration = shouldSnap ? 0.001 : THREE.MathUtils.clamp(elapsed, 1 / 120, 0.14);
+  const liveIds = new Set();
+
+  data.cars.forEach((car) => {
+    liveIds.add(car.id);
+    const target = copyCarState(car);
+    const previous = state.carTracks.get(car.id);
+    const from = shouldSnap || !previous ? target : sampleCarTrack(previous, now);
+    state.carTracks.set(car.id, { from, to: target, start: now, duration });
+  });
+
+  for (const id of state.carTracks.keys()) {
+    if (!liveIds.has(id)) state.carTracks.delete(id);
+  }
+
+  state.lastSnapshotAt = now;
+  state.lastSnapshotGeneration = data.generation;
+  state.lastSnapshotSimTime = data.simTime;
+  state.lastRoadKey = roadKey;
+}
+
+function applyRenderedMeshes(dt) {
+  if (!state.data) return;
+  const now = performance.now() / 1000;
   let bestX = 0;
   let focusCar = null;
-  data.cars.forEach((car) => {
-    const mesh = state.meshes.get(car.id);
-    if (!mesh) return;
+
+  for (const [id, track] of state.carTracks) {
+    const mesh = state.meshes.get(id);
+    if (!mesh) continue;
+    const car = sampleCarTrack(track, now);
+    if (!car) continue;
     mesh.position.set(car.x, car.y, car.laneZ);
     mesh.rotation.set(0, 0, car.theta);
     mesh.visible = true;
@@ -256,12 +334,14 @@ function updateMeshes(data) {
       wheel.position.set(local.x, local.y, 0);
       wheel.rotation.z = car.wheels[i]?.spin || 0;
     });
-  });
-  state.followX = state.followX * 0.94 + Math.max(12, bestX) * 0.06;
+  }
+
+  const followAlpha = 1 - Math.exp(-dt * 1.8);
+  state.followX = THREE.MathUtils.lerp(state.followX, Math.max(12, bestX), followAlpha);
   const desiredFocus = focusCar
     ? new THREE.Vector3(focusCar.x + 1.5, focusCar.y + 1.6, focusCar.laneZ)
     : new THREE.Vector3(Math.max(12, bestX), roadHeightAt(Math.max(12, bestX)) + 1.8, 0);
-  state.focusTarget.lerp(desiredFocus, 0.12);
+  state.focusTarget.lerp(desiredFocus, 1 - Math.exp(-dt * 4.0));
 }
 
 function roadHeightAt(x) {
@@ -450,6 +530,7 @@ function updateCamera(dt) {
 function render() {
   requestAnimationFrame(render);
   const dt = Math.min(0.08, clock.getDelta());
+  applyRenderedMeshes(dt);
   updateCamera(dt);
   renderer.render(scene, camera);
 }
@@ -583,7 +664,7 @@ function updateUI(data) {
   const bestCar = [...data.cars].sort((a, b) => b.fitness - a.fitness)[0];
   $("best").textContent = bestCar ? `best ${bestCar.id}: ${bestCar.fitness.toFixed(1)} (${Math.max(0, bestCar.maxX - 4).toFixed(1)}m)` : "best: —";
   const list = $("cars-list");
-  updateGenealogy(data);
+  if (state.activeTab === "genealogy") updateGenealogy(data);
   list.innerHTML = data.population.map((gene) => {
     const car = data.cars.find((c) => c.id === gene.id);
     const cls = car?.done ? (car.reason === "crashed" ? "done crashed" : "done") : "";
@@ -602,9 +683,9 @@ function connectWs() {
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     state.data = data;
-    updateMeshes(data);
+    ingestSnapshot(data);
     const now = performance.now();
-    if (!state.lastUi || now - state.lastUi > 300 || state.lastGeneration !== data.generation || state.lastRunning !== data.running) {
+    if (!state.lastUi || now - state.lastUi > 500 || state.lastGeneration !== data.generation || state.lastRunning !== data.running) {
       updateUI(data);
       state.lastUi = now;
       state.lastGeneration = data.generation;
@@ -645,6 +726,7 @@ $("map-select").addEventListener("change", (event) => fire(post("/api/map", { pr
 $("mutation").addEventListener("input", (event) => { $("mutation-label").textContent = Number(event.target.value).toFixed(2); });
 
 function setTab(name) {
+  state.activeTab = name;
   $("simulation-view").classList.toggle("active", name === "sim");
   $("random-view").classList.toggle("active", name === "random");
   $("genealogy-view").classList.toggle("active", name === "genealogy");
