@@ -7,6 +7,18 @@ A browser-controlled simulator for evolving simple 3D cars over a fixed ragged r
 - A separate **Random car lab** tab generates standalone random car genes.
 - A persistent **Leaderboard** tab stores the top 10 cars per map, with one best entry per visitor.
 
+## Screenshots
+
+![Generation 0 on the easy rolling test road](assets/image_2026-05-28_08-47-06.png)
+
+![Generation 1 running on the easy rolling test road](assets/image_2026-05-28_08-46-26.png)
+
+![Later generation cars evolving over the road](assets/image_2026-05-28_08-48-34.png)
+
+![Random car lab with gene JSON output](assets/image_2026-05-28_08-48-01.png)
+
+![Generation genealogy timeline](assets/image_2026-05-28_08-48-53.png)
+
 ## Run locally
 
 ```bash
