@@ -2,6 +2,8 @@
 
 A browser-controlled simulator for evolving simple 3D cars over a fixed ragged road.
 
+Deployed at <https://genetic-simulator.shelamanov.com/>.
+
 - Python owns genes, random car generation, crossover/elitism/copying/mutation, road generation, and toy physics evaluation.
 - The browser visualizes the simulation in 3D and shows each car's 2D body projection plus full gene JSON.
 - A separate **Random car lab** tab generates standalone random car genes.
