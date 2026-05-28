@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import asyncio
 import math
-import random
 import time
 from contextlib import suppress
 from typing import Any
@@ -208,7 +207,7 @@ class SimulationManager:
     def __init__(self) -> None:
         self.road = Road(seed=1337, preset="easy")
         self.generation = 0
-        self.population: list[CarGene] = random_population(generation=0, seed=42)
+        self.population: list[CarGene] = random_population(generation=0)
         self.genealogy: list[dict[str, Any]] = []
         self.cars: list[SimCar] = []
         self.running = False
@@ -223,7 +222,6 @@ class SimulationManager:
         self.last_wall_tick = time.time()
         self._task: asyncio.Task | None = None
         self._lock = asyncio.Lock()
-        self._last_seed = 1000
         self._record_generation()
         self.reset_cars()
 
@@ -261,7 +259,11 @@ class SimulationManager:
             gene.fitness = 0.0
             gene.distance = 0.0
             gene.time_alive = 0.0
-            car = SimCar(gene=gene, lane_z=start_z + i * lane_gap, index=i)
+            # Population order puts elites first after evolution. Render lanes in
+            # reverse order so elites appear on the opposite edge from before,
+            # with crossover/mutation/random cars toward the other side.
+            lane_index = len(self.population) - 1 - i
+            car = SimCar(gene=gene, lane_z=start_z + lane_index * lane_gap, index=i)
             car.x = 4.0
             car.y = self.road.height(car.x) + 1.5 + i * 0.015
             car.last_progress_time = 0.0
@@ -310,11 +312,9 @@ class SimulationManager:
 
     def _evolve_locked(self, elite_count: int = 2, copy_count: int = 1, mutation_rate: float = 0.22) -> None:
         self.generation += 1
-        self._last_seed += 1
         self.population = evolve_population(
             self.population,
             generation=self.generation,
-            seed=self._last_seed,
             elite_count=elite_count,
             copy_count=copy_count,
             mutation_rate=mutation_rate,
@@ -340,11 +340,10 @@ class SimulationManager:
         async with self._lock:
             self.speed = clamp(speed, 0.05, 40.0)
 
-    async def randomize(self, seed: int | None = None) -> None:
+    async def randomize(self) -> None:
         async with self._lock:
             self.generation = 0
-            self._last_seed = seed if seed is not None else self._last_seed + 1
-            self.population = random_population(generation=0, seed=self._last_seed)
+            self.population = random_population(generation=0)
             self.genealogy = []
             self.running = False
             self.auto_evolve = False
@@ -392,9 +391,8 @@ class SimulationManager:
             else:
                 self.running = False
 
-    async def random_car(self, seed: int | None = None) -> CarGene:
-        rng = random.Random(seed if seed is not None else time.time_ns())
-        return random_gene(self.generation, rng)
+    async def random_car(self) -> CarGene:
+        return random_gene(self.generation)
 
     async def snapshot(self) -> dict[str, Any]:
         async with self._lock:

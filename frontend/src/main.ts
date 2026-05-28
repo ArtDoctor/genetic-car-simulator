@@ -703,7 +703,7 @@ $("tab-random").addEventListener("click", () => setTab("random"));
 $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
 
 async function generateOne() {
-  const gene = await (await fetch(`/api/random-car?seed=${Date.now()}`)).json();
+  const gene = await (await fetch("/api/random-car")).json();
   $("random-svg").innerHTML = svgForGene(gene, null, true);
   $("random-json").textContent = JSON.stringify(gene, null, 2);
 }

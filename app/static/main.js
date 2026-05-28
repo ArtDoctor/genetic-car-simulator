@@ -837,7 +837,7 @@ $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
 $("tab-leaderboard").addEventListener("click", () => setTab("leaderboard"));
 
 async function generateOne() {
-  const res = await fetch(`/api/random-car?seed=${Date.now()}`, { credentials: "same-origin" });
+  const res = await fetch("/api/random-car", { credentials: "same-origin" });
   if (!res.ok) throw new Error(await res.text());
   const gene = await res.json();
   $("random-svg").innerHTML = svgForGene(gene, null, true);

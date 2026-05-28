@@ -204,8 +204,8 @@ class SimulationProcess:
     async def road(self) -> dict[str, Any]:
         return await self._call("road")
 
-    async def random_car(self, seed: int | None = None) -> dict[str, Any]:
-        return await self._call("random_car", seed=seed)
+    async def random_car(self) -> dict[str, Any]:
+        return await self._call("random_car")
 
     async def start(self) -> None:
         await self._acquire_running_slot()
@@ -230,8 +230,8 @@ class SimulationProcess:
     async def set_speed(self, speed: float) -> None:
         await self._call("set_speed", speed)
 
-    async def randomize(self, seed: int | None = None) -> None:
-        await self._call("randomize", seed=seed)
+    async def randomize(self) -> None:
+        await self._call("randomize")
         self._release_running_slot()
 
     async def set_map(self, preset: str, seed: int | None = None) -> None:

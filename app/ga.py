@@ -12,6 +12,15 @@ POPULATION_SIZE = 10
 POWER_BUDGET = 110.0  # same available power for every car, in prototype physics units
 
 
+def new_rng(seed: int | None = None) -> random.Random:
+    """Return a random source.
+
+    When no seed is supplied, use OS-backed randomness so fresh visitors and
+    button clicks do not replay the same sequence.
+    """
+    return random.Random(seed) if seed is not None else random.SystemRandom()
+
+
 class WheelGene(BaseModel):
     x: float
     y: float
@@ -282,7 +291,7 @@ def clamp_float(v: float, low: float, high: float) -> float:
 
 
 def random_gene(generation: int = 0, rng: random.Random | None = None) -> CarGene:
-    rng = rng or random.Random()
+    rng = rng or new_rng()
     body = random_body(rng)
     min_x, max_x, min_y, max_y = _body_bounds(body)
     wheel_count = rng.randint(2, 4)
@@ -316,7 +325,7 @@ def random_gene(generation: int = 0, rng: random.Random | None = None) -> CarGen
 
 
 def random_population(generation: int = 0, seed: int | None = None, size: int = POPULATION_SIZE) -> list[CarGene]:
-    rng = random.Random(seed)
+    rng = new_rng(seed)
     return [random_gene(generation, rng) for _ in range(size)]
 
 
@@ -429,7 +438,7 @@ def evolve_population(
     copy_count: int = 1,
     mutation_rate: float = 0.22,
 ) -> list[CarGene]:
-    rng = random.Random(seed)
+    rng = new_rng(seed)
     ranked = sorted(population, key=lambda g: g.fitness, reverse=True)
     next_gen: list[CarGene] = []
     for elite in ranked[:elite_count]:

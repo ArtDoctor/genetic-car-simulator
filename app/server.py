@@ -234,13 +234,13 @@ async def leaderboard_state() -> dict[str, Any]:
 
 
 @app.get("/api/random-car")
-async def random_car(seed: int | None = None, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
-    return await manager.random_car(seed=seed)
+async def random_car(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
+    return await manager.random_car()
 
 
 @app.post("/api/randomize")
-async def randomize(seed: int | None = None, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
-    await manager.randomize(seed=seed)
+async def randomize(manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
+    await manager.randomize()
     return await manager.snapshot()
 
 
