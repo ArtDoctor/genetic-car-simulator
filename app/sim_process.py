@@ -25,9 +25,6 @@ class SimulationCapacityError(RuntimeError):
 
 
 def _multiprocessing_context() -> BaseContext:
-    # A separate process per active visitor lets simultaneous simulations run on
-    # separate CPU cores. Prefer fork on Unix because this server is Linux/Docker
-    # oriented and fork avoids spawn importing the ASGI app in the child.
     methods = mp.get_all_start_methods()
     return mp.get_context("fork" if "fork" in methods else methods[0])
 
@@ -91,8 +88,6 @@ def _worker_main(command_queue: mp.Queue, response_queue: mp.Queue) -> None:
 
 
 class SimulationProcess:
-    """Async proxy for one visitor's simulation worker process."""
-
     def __init__(self) -> None:
         self._ctx = _multiprocessing_context()
         self._command_queue: mp.Queue | None = None
@@ -157,8 +152,6 @@ class SimulationProcess:
                 except queue.Empty as exc:
                     raise TimeoutError(f"simulation worker timed out during {command}") from exc
                 if response_id != request_id:
-                    # Calls for a session are serialized, so this should not happen;
-                    # ignore stale responses defensively if a previous call timed out.
                     continue
                 if ok:
                     return payload

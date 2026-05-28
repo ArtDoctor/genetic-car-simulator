@@ -9,15 +9,10 @@ from uuid import uuid4
 from pydantic import BaseModel
 
 POPULATION_SIZE = 10
-POWER_BUDGET = 110.0  # same available power for every car, in prototype physics units
+POWER_BUDGET = 110.0
 
 
 def new_rng(seed: int | None = None) -> random.Random:
-    """Return a random source.
-
-    When no seed is supplied, use OS-backed randomness so fresh visitors and
-    button clicks do not replay the same sequence.
-    """
     return random.Random(seed) if seed is not None else random.SystemRandom()
 
 
@@ -65,15 +60,11 @@ class CarGene(BaseModel):
         data = self.model_dump()
         data["used_power_fraction"] = sum(w.power_fraction for w in self.wheels)
         data["power_budget"] = POWER_BUDGET
-        # Python-generated side-body mesh: the browser may render from this or
-        # rebuild the same extrusion locally. Keeping it in the gene payload makes
-        # the backend the source of truth for 3D generation.
         data["body_mesh"] = extruded_body_mesh(self.body, self.width)
         return data
 
 
 def extruded_body_mesh(body: list[list[float]], width: float) -> dict[str, Any]:
-    """Return a simple prism mesh for the 2D side profile with z-width."""
     half = width / 2.0
     vertices = [[x, y, -half] for x, y in body] + [[x, y, half] for x, y in body]
     n = len(body)
@@ -89,8 +80,6 @@ def extruded_body_mesh(body: list[list[float]], width: float) -> dict[str, Any]:
 
 
 def _hex_color(rng: random.Random) -> str:
-    # Color is a visual-only chromosome gene. It mutates/crosses over for lineage
-    # tracking, but it does not affect physics or fitness.
     return "#" + "".join(f"{rng.randrange(32, 256):02x}" for _ in range(3))
 
 
@@ -141,14 +130,12 @@ def random_body(rng: random.Random) -> list[list[float]]:
         a = (i / n) * math.tau + rng.uniform(-0.18, 0.18)
         rx = rng.uniform(1.0, 1.9)
         ry = rng.uniform(0.35, 0.85)
-        # Bias the top larger than the bottom so wheels usually fit under it.
         y_bias = 0.08 if math.sin(a) > 0 else -0.03
         pts.append([round(math.cos(a) * rx, 3), round(math.sin(a) * ry + y_bias, 3)])
     pts = _sort_polygon(pts)
     min_x, max_x, min_y, max_y = _body_bounds(pts)
     sx = max(2.0, max_x - min_x)
     sy = max(0.8, max_y - min_y)
-    # Normalize into a stable local coordinate range while retaining raggedness.
     norm = []
     for x, y in pts:
         norm.append([round((x - (min_x + max_x) / 2) * (2.8 / sx), 3), round((y - (min_y + max_y) / 2) * (1.25 / sy), 3)])
@@ -156,7 +143,6 @@ def random_body(rng: random.Random) -> list[list[float]]:
 
 
 def lower_y_at(body: list[list[float]], x: float) -> float:
-    # Intersect vertical line with polygon edges and return the lower crossing.
     hits: list[float] = []
     for i, p0 in enumerate(body):
         p1 = body[(i + 1) % len(body)]
@@ -182,12 +168,6 @@ def _cap_power(wheels: list[WheelGene], rng: random.Random | None = None) -> Non
 
 
 def repair_wheels(body: list[list[float]], wheels: list[WheelGene], rng: random.Random | None = None) -> list[WheelGene]:
-    """Clamp and nudge wheels so their 2D circles never intersect.
-
-    Wheel centers are intentionally allowed all around the side silhouette:
-    inside the body, above it, on the sides, and below it. Evolution can discover
-    whether those odd placements help or hurt.
-    """
     if not wheels:
         return wheels
     wheels = wheels[:4]
@@ -236,7 +216,6 @@ def repair_wheels(body: list[list[float]], wheels: list[WheelGene], rng: random.
         if not changed:
             break
 
-    # If a very crowded mutated layout still overlaps, shrink only enough to fit.
     for _ in range(3):
         any_overlap = False
         for i, a in enumerate(wheels):
@@ -260,8 +239,6 @@ def repair_wheels(body: list[list[float]], wheels: list[WheelGene], rng: random.
             for b in wheels[i + 1 :]
         )
 
-    # Absolute guarantee: if clamping made iterative repair impossible, fall back
-    # to a small randomised grid inside the allowed area.
     if has_overlap():
         n = len(wheels)
         cols = 2 if n > 1 else 1
@@ -301,7 +278,6 @@ def random_gene(generation: int = 0, rng: random.Random | None = None) -> CarGen
     wheels = []
     for weight in weights:
         radius = rng.uniform(0.20, 0.52)
-        # Random attachment in/around the side profile: inside, top, sides, or low.
         x = rng.uniform(min_x - 0.12, max_x + 0.12)
         y = rng.uniform(min_y - 0.12, max_y + 0.32)
         wheels.append(
@@ -369,14 +345,11 @@ def mutate(gene: CarGene, rng: random.Random, rate: float = 0.22, strength: floa
         )
     if rng.random() < rate * 0.15 and len(g.wheels) > 2:
         g.wheels.pop(rng.randrange(len(g.wheels)))
-    # Keep wheels valid after mutations: circles do not intersect, x stays on the
-    # body, and total used power remains <= 100%.
     g.wheels = repair_wheels(g.body, g.wheels, rng)
     return g
 
 
 def crossover(a: CarGene, b: CarGene, rng: random.Random, generation: int) -> CarGene:
-    # Use one body as the topology and gently blend matching vertices where possible.
     base = deepcopy(a if rng.random() < 0.5 else b)
     other = b if base.id == a.id else a
     child = base.copy_for_generation(

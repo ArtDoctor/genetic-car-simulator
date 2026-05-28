@@ -123,9 +123,6 @@ renderer.domElement.addEventListener("wheel", (event) => {
     applyOrbitCamera(true);
     return;
   }
-  // Default zoom never changes the orbit center. It zooms toward/away from the
-  // moving focus target (furthest car), so wheel scrolling does not throw the
-  // camera to a random raycast point.
   state.autoOrbitRadius = THREE.MathUtils.clamp(state.autoOrbitRadius + zoomDelta, 5, 180);
   state.cameraMode = "auto";
 }, { passive: false });
@@ -480,9 +477,6 @@ function svgGeneLayout(gene, large = false) {
   const maxY = Math.max(...ys, 0.8);
   const spanX = Math.max(0.1, maxX - minX);
   const spanY = Math.max(0.1, maxY - minY);
-  // Use one uniform pixels-per-world-unit scale for x, y, and wheel radius.
-  // The simulator renders the same unwarped coordinates; the old random-lab SVG
-  // used different x/y scales, which made valid wheels look like they overlapped.
   const scale = Math.min((plot.right - plot.left) / spanX, (plot.bottom - plot.top) / spanY) * 0.96;
   const centerX = (minX + maxX) / 2;
   const centerY = (minY + maxY) / 2;

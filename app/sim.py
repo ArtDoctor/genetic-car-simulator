@@ -72,11 +72,9 @@ class SimCar(BaseModel):
         if self.done:
             return
         self.vy -= 9.81 * dt
-        # Air drag / angular damping keep the toy model numerically stable.
         self.vx *= (1.0 - min(0.08, 0.08 * dt))
         self.omega *= (1.0 - min(0.4, 0.65 * dt))
 
-        # Wheel contacts: spring normal force plus motor force along terrain tangent.
         for i, wg in enumerate(self.gene.wheels):
             center = self.local_to_world((wg.x, wg.y))
             ground_y = road.height(center[0])
@@ -96,16 +94,12 @@ class SimCar(BaseModel):
                 traction_limit = normal_force_mag * 0.95
                 motor_force_mag = min(motor_force_mag, traction_limit)
                 self.apply_force((tangent[0] * motor_force_mag, tangent[1] * motor_force_mag), center, dt)
-                # Rolling resistance opposing current motion.
                 resistance = clamp(v_t * 1.1, -traction_limit * 0.25, traction_limit * 0.25)
                 self.apply_force((-tangent[0] * resistance, -tangent[1] * resistance), center, dt)
                 self.wheel_spin[i] += (v_t / max(0.08, wg.radius)) * dt
             else:
                 self.wheel_spin[i] += self.omega * dt
 
-        # Body collision: sample vertices plus edge midpoints/thirds so sharp rocks
-        # cannot tunnel through long polygon edges. Contact is high-friction and
-        # off-center, making bad bodies flip instead of ghosting through terrain.
         for p in self.body_contacts:
             wp = self.local_to_world(p)
             ground_y = road.height(wp[0])
@@ -117,8 +111,6 @@ class SimCar(BaseModel):
                 f_n = max(0.0, 1350.0 * pen - 58.0 * dot(v_at, normal))
                 self.apply_force((normal[0] * f_n, normal[1] * f_n), wp, dt)
                 vt = dot(v_at, tangent)
-                # High body-ground friction: bad low bodies should scrape, slow down,
-                # and catch on obstacles instead of sliding over them easily.
                 scrape = clamp(vt * 18.0, -f_n * 1.85, f_n * 1.85)
                 self.apply_force((-tangent[0] * scrape, -tangent[1] * scrape), wp, dt)
 
@@ -127,7 +119,6 @@ class SimCar(BaseModel):
         self.theta += self.omega * dt
         self.theta = ((self.theta + math.pi) % (2 * math.pi)) - math.pi
 
-        # Safety clamps for runaway numerical states.
         self.vx = clamp(self.vx, -35.0, 45.0)
         self.vy = clamp(self.vy, -45.0, 45.0)
         self.omega = clamp(self.omega, -10.0, 10.0)
@@ -259,9 +250,6 @@ class SimulationManager:
             gene.fitness = 0.0
             gene.distance = 0.0
             gene.time_alive = 0.0
-            # Population order puts elites first after evolution. Render lanes in
-            # reverse order so elites appear on the opposite edge from before,
-            # with crossover/mutation/random cars toward the other side.
             lane_index = len(self.population) - 1 - i
             car = SimCar(gene=gene, lane_z=start_z + lane_index * lane_gap, index=i)
             car.x = 4.0

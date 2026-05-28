@@ -1,6 +1,6 @@
 # Frontend source
 
-The runnable prototype serves `/app/static/main.js` directly so you can start with only Python.
+The app serves `/app/static/main.js` directly so you can start with only Python.
 
 `src/main.ts` is the TypeScript source mirror for editing. Optional type-checking:
 

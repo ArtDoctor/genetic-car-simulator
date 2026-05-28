@@ -34,15 +34,6 @@ class SessionEntry:
 
 
 class SessionStore:
-    """In-memory per-visitor simulation managers.
-
-    The old server used one global simulation manager, so every browser fought over
-    the same population, road, and running state. Keeping a manager per visitor is
-    the smallest backend change because the existing Python simulation stays as-is;
-    the browser just gets a session cookie and all API/WebSocket traffic resolves
-    to that visitor's manager.
-    """
-
     def __init__(self) -> None:
         self._sessions: dict[str, SessionEntry] = {}
         self._lock = asyncio.Lock()
@@ -168,7 +159,7 @@ async def lifespan(app: FastAPI):
         await sessions.close_all()
 
 
-app = FastAPI(title="Genetic Car Simulator Prototype", lifespan=lifespan)
+app = FastAPI(title="Genetic Car Simulator", lifespan=lifespan)
 app.mount("/static", StaticFiles(directory=STATIC), name="static")
 
 

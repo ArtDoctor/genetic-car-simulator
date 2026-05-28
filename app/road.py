@@ -71,8 +71,6 @@ class Road(BaseModel):
         count = int(self.length / self.dx) + 1
         samples: list[Tuple[float, float]] = []
 
-        # Pre-generate narrow triangular teeth/rocks. They are constant across the
-        # road width but abrupt along x, so short wheelbases and tall cars flip.
         obstacles: list[tuple[float, float, float, float]] = []
         x = 24.0
         spacing_min, spacing_max = params["obstacle_spacing"]
@@ -81,7 +79,6 @@ class Road(BaseModel):
             x += rng.uniform(spacing_min, spacing_max)
             half_width = rng.uniform(width_min, width_max)
             height = rng.choice([-1.0, 1.0]) * rng.uniform(params["obstacle_min"], params["obstacle_max"])
-            # Most obstacles are upward rocks; some are sharp potholes.
             if rng.random() < params["up_bias"]:
                 height = abs(height)
             skew = rng.uniform(-0.45, 0.45)
@@ -91,8 +88,6 @@ class Road(BaseModel):
         slope = 0.0
         for i in range(count):
             x = i * self.dx
-            # Rolling hills are only the base. The high-frequency random walk and
-            # triangular obstacles make the terrain intentionally hostile.
             hill = params["hill"]
             target = hill * (
                 1.1 * math.sin(x * 0.029)
@@ -114,8 +109,6 @@ class Road(BaseModel):
                     w = left_w if d < 0 else right_w
                     obstacle_y += height * max(0.0, 1.0 - abs(d) / max(0.15, w))
 
-            # Keep a launch pad flat so all cars reach the hostile section fairly,
-            # then blend the roughness in over a few meters.
             if x < 16.0:
                 y = 0.0
                 slope = 0.0
@@ -125,7 +118,6 @@ class Road(BaseModel):
             else:
                 roughness = min(1.0, (x - 16.0) / 7.0)
             samples.append((x, y + (ragged + obstacle_y) * roughness))
-        # Pin the whole road near y=0 around the start.
         origin_y = samples[0][1]
         return [(x, yy - origin_y) for x, yy in samples]
 

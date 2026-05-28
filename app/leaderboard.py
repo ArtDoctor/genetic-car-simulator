@@ -15,12 +15,6 @@ LEADERBOARD_FILE = Path(os.getenv("LEADERBOARD_FILE", "/app/data/leaderboard.jso
 
 
 class LeaderboardStore:
-    """Persistent top-10 leaderboard, grouped by road preset.
-
-    Stores at most one entry per visitor per map. The visitor id is a short hash of
-    the session cookie, so the file has stable dedupe without storing the raw cookie.
-    """
-
     def __init__(self, path: Path = LEADERBOARD_FILE, limit: int = LEADERBOARD_LIMIT) -> None:
         self.path = path
         self.limit = limit
@@ -91,7 +85,6 @@ class LeaderboardStore:
             fitness = float(best.get("fitness") or 0)
             distance = float(best.get("distance") or 0)
 
-        # Avoid filling the leaderboard with untouched/random cars before any run.
         if fitness <= 0 and distance <= 0:
             return None
 
