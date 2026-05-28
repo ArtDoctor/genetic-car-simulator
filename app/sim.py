@@ -21,6 +21,46 @@ def clamp(v: float, lo: float, hi: float) -> float:
     return max(lo, min(hi, v))
 
 
+WHEEL_CONTACT_SAMPLE_FACTORS = (-1.0, -0.75, -0.5, -0.25, 0.0, 0.25, 0.5, 0.75, 1.0)
+WHEEL_SPRING = 7800.0
+WHEEL_DAMPING = 180.0
+WHEEL_CONTACT_SLOP = 0.025
+WHEEL_POSITION_CORRECTION = 0.85
+BODY_SPRING = 5200.0
+BODY_DAMPING = 150.0
+
+
+def wheel_ground_contact(
+    road: Road,
+    center: tuple[float, float],
+    radius: float,
+) -> tuple[float, tuple[float, float], tuple[float, float]]:
+    """Return wheel penetration plus tangent/normal for a circle over the heightfield.
+
+    Sampling across the wheel footprint catches slope/obstacle contacts before the
+    axle is directly above them. A center-only check makes wheels visibly clip
+    steep road segments even while the spring is active.
+    """
+    cx, cy = center
+    best_x = cx
+    best_supported_y = road.height(cx) + radius
+
+    offsets = [radius * factor for factor in WHEEL_CONTACT_SAMPLE_FACTORS]
+    slope = road.slope(cx)
+    offsets.append(clamp(slope * radius / math.sqrt(1.0 + slope * slope), -radius, radius))
+
+    for offset in offsets:
+        contact_x = cx + offset
+        chord = math.sqrt(max(0.0, radius * radius - offset * offset))
+        supported_y = road.height(contact_x) + chord
+        if supported_y > best_supported_y:
+            best_supported_y = supported_y
+            best_x = contact_x
+
+    tangent, normal = road.tangent_normal(best_x)
+    return best_supported_y - cy, tangent, normal
+
+
 class SimCar(BaseModel):
     gene: CarGene
     lane_z: float
@@ -69,6 +109,26 @@ class SimCar(BaseModel):
         ry = point_world[1] - self.y
         return (self.vx - self.omega * ry, self.vy + self.omega * rx)
 
+    def correct_wheel_penetration(self, road: Road) -> None:
+        correction_x = 0.0
+        correction_y = 0.0
+        correction_count = 0
+        for wg in self.gene.wheels:
+            center = self.local_to_world((wg.x, wg.y))
+            penetration, _, normal = wheel_ground_contact(road, center, wg.radius)
+            if penetration <= WHEEL_CONTACT_SLOP:
+                continue
+            correction = min(
+                (penetration - WHEEL_CONTACT_SLOP) * WHEEL_POSITION_CORRECTION,
+                wg.radius * 0.45,
+            )
+            correction_x += normal[0] * correction
+            correction_y += normal[1] * correction
+            correction_count += 1
+        if correction_count:
+            self.x += correction_x / correction_count
+            self.y += correction_y / correction_count
+
     def step(self, road: Road, dt: float, sim_time: float, stall_seconds: float, max_time: float) -> None:
         if self.done:
             return
@@ -78,16 +138,13 @@ class SimCar(BaseModel):
 
         for i, wg in enumerate(self.gene.wheels):
             center = self.local_to_world((wg.x, wg.y))
-            ground_y = road.height(center[0])
-            tangent, normal = road.tangent_normal(center[0])
-            penetration = ground_y + wg.radius - center[1]
+            penetration, tangent, normal = wheel_ground_contact(road, center, wg.radius)
             if penetration > 0:
                 v_at = self.velocity_at(center)
                 v_n = dot(v_at, normal)
-                normal_force_mag = max(0.0, 620.0 * penetration - 36.0 * v_n)
+                normal_force_mag = max(0.0, WHEEL_SPRING * penetration - WHEEL_DAMPING * v_n)
                 normal_force = (normal[0] * normal_force_mag, normal[1] * normal_force_mag)
                 self.apply_force(normal_force, center, dt)
-
                 v_t = dot(v_at, tangent)
                 wheel_power = POWER_BUDGET * wg.power_fraction
                 startup_bonus = 18.0 * wg.power_fraction
@@ -109,7 +166,7 @@ class SimCar(BaseModel):
                 tangent, normal = road.tangent_normal(wp[0])
                 v_at = self.velocity_at(wp)
                 pen = ground_y + clearance - wp[1]
-                f_n = max(0.0, 1350.0 * pen - 58.0 * dot(v_at, normal))
+                f_n = max(0.0, BODY_SPRING * pen - BODY_DAMPING * dot(v_at, normal))
                 self.apply_force((normal[0] * f_n, normal[1] * f_n), wp, dt)
                 vt = dot(v_at, tangent)
                 scrape = clamp(vt * 18.0, -f_n * 1.85, f_n * 1.85)
@@ -119,6 +176,8 @@ class SimCar(BaseModel):
         self.y += self.vy * dt
         self.theta += self.omega * dt
         self.theta = ((self.theta + math.pi) % (2 * math.pi)) - math.pi
+
+        self.correct_wheel_penetration(road)
 
         self.vx = clamp(self.vx, -35.0, 45.0)
         self.vy = clamp(self.vy, -45.0, 45.0)
