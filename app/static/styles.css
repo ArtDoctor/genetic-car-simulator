@@ -298,6 +298,42 @@ input[type="range"] {
   font-variant-numeric: tabular-nums;
 }
 
+.field.compact { margin: 0; }
+
+.import-box {
+  display: grid;
+  gap: 0.55rem;
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255,255,255,0.035);
+  padding: 0.72rem;
+}
+
+.population-import { margin-top: 0.85rem; }
+
+.import-row {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 0.55rem;
+  align-items: end;
+}
+
+textarea {
+  width: 100%;
+  resize: vertical;
+  min-height: 5rem;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: rgba(3, 7, 17, 0.62);
+  color: var(--text);
+  padding: 0.7rem;
+  font: 0.8rem/1.45 ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+input[type="file"] { color: var(--muted); font-size: 0.78rem; }
+
+.hidden { display: none !important; }
+
 .cars-list { display: grid; gap: 0.7rem; }
 
 .car-card {
@@ -314,6 +350,11 @@ input[type="range"] {
   background: rgba(255,255,255,0.062);
 }
 
+.car-card.selected {
+  border-color: rgba(245, 245, 245, 0.68);
+  background: rgba(255,255,255,0.09);
+}
+
 .car-top {
   display: flex;
   align-items: center;
@@ -327,6 +368,34 @@ input[type="range"] {
 .metric { color: #f5f5f5; font-variant-numeric: tabular-nums; font-weight: 800; }
 .car-card.done .metric { color: #d4d4d4; }
 .car-card.crashed .metric { color: #a3a3a3; }
+
+.card-actions, .selected-actions, .leaderboard-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  margin: 0.45rem 0;
+}
+
+.card-actions button, .selected-actions button, .leaderboard-actions button {
+  padding: 0.42rem 0.58rem;
+  font-size: 0.72rem;
+}
+
+.selected-car-content { display: grid; gap: 0.75rem; }
+.selected-car-content .car-svg { height: 220px; }
+.stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0.45rem;
+}
+.stats-grid div {
+  border: 1px solid rgba(255,255,255,0.09);
+  border-radius: 12px;
+  background: rgba(255,255,255,0.035);
+  padding: 0.55rem;
+}
+.stats-grid span { display: block; color: var(--muted); font-size: 0.72rem; }
+.stats-grid strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 0.88rem; }
 
 .car-svg {
   width: 100%;
@@ -362,6 +431,17 @@ pre {
 
 .random-stage { min-height: 520px; }
 .random-stage > p { margin-bottom: 1rem; }
+.random-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.55rem;
+  align-items: center;
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
+  transform: none;
+}
 .large-svg svg {
   width: 100%;
   height: 360px;
@@ -415,8 +495,16 @@ pre {
   grid-template-columns: 3rem minmax(120px, 180px) 1fr;
   gap: 0.7rem;
   align-items: center;
-  padding: 0.65rem 0;
+  padding: 0.65rem;
   border-top: 1px solid rgba(255,255,255,0.08);
+  border-radius: 16px;
+  cursor: pointer;
+}
+
+.leaderboard-entry.current-user {
+  border: 1px solid rgba(245, 245, 245, 0.45);
+  background: rgba(245, 245, 245, 0.09);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,0.08);
 }
 
 .leaderboard-rank {
@@ -442,6 +530,19 @@ pre {
 
 .leaderboard-meta strong {
   font-size: 0.92rem;
+}
+
+.leaderboard-name { cursor: pointer; }
+.you-marker {
+  display: inline-block;
+  margin-left: 0.35rem;
+  padding: 0.14rem 0.38rem;
+  border-radius: 999px;
+  background: #f5f5f5;
+  color: #050505;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
 }
 
 .leaderboard-meta span {
@@ -497,6 +598,9 @@ pre {
 .legend-dot.copy { background: #d4d4d4; }
 .legend-dot.crossover { background: #a3a3a3; }
 .small-note { font-size: 0.85rem; margin: 0.9rem 0; }
+.genealogy-details { display: grid; gap: 0.65rem; color: var(--muted); }
+.genealogy-details .car-svg { margin: 0; }
+.genealogy-details pre { max-height: 300px; }
 
 @media (max-width: 1050px) {
   .app-header { align-items: flex-start; flex-direction: column; }

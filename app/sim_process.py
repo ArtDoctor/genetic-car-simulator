@@ -57,6 +57,9 @@ async def _execute(manager: SimulationManager, command: str, args: tuple[Any, ..
     if command == "set_auto_evolve":
         await manager.set_auto_evolve(*args, **kwargs)
         return None
+    if command == "import_car":
+        await manager.import_car(*args, **kwargs)
+        return None
     raise ValueError(f"unknown simulation command: {command}")
 
 
@@ -252,3 +255,7 @@ class SimulationProcess:
             raise
         if not enabled:
             self._release_running_slot()
+
+    async def import_car(self, gene_data: dict[str, Any], index: int) -> None:
+        await self._call("import_car", gene_data, index)
+        self._release_running_slot()

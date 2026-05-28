@@ -5,6 +5,7 @@ import math
 import time
 from contextlib import suppress
 from typing import Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
@@ -229,11 +230,14 @@ class SimulationManager:
                     "fitness": gene.fitness,
                     "distance": gene.distance,
                     "timeAlive": gene.time_alive,
+                    "generation": gene.generation,
                     "wheelCount": len(gene.wheels),
                     "usedPowerFraction": round(sum(w.power_fraction for w in gene.wheels), 3),
+                    "used_power_fraction": round(sum(w.power_fraction for w in gene.wheels), 3),
                     "body": gene.body,
                     "wheels": [w.model_dump() for w in gene.wheels],
                     "width": gene.width,
+                    "density": gene.density,
                 }
                 for gene in self.population
             ],
@@ -381,6 +385,24 @@ class SimulationManager:
 
     async def random_car(self) -> CarGene:
         return random_gene(self.generation)
+
+    async def import_car(self, gene_data: dict[str, Any], index: int) -> None:
+        imported = CarGene.model_validate(gene_data)
+        async with self._lock:
+            slot = int(clamp(index, 0, max(0, len(self.population) - 1)))
+            source_id = imported.id
+            imported = imported.copy_for_generation(
+                self.generation,
+                "imported",
+                parent_ids=[source_id] if source_id else [],
+                reproduction="imported",
+            )
+            imported.id = str(uuid4())[:8]
+            self.population[slot] = imported
+            self.running = False
+            self.auto_evolve = False
+            self._record_generation()
+            self.reset_cars()
 
     async def snapshot(self) -> dict[str, Any]:
         async with self._lock:

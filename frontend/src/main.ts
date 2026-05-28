@@ -1,6 +1,10 @@
+// @ts-nocheck
 import * as THREE from "three";
 
 const $ = (id) => document.getElementById(id);
+const DEFAULT_SPEED = 1;
+const DEFAULT_MUTATION_RATE = 0.22;
+
 const state = {
   data: null,
   meshes: new Map(),
@@ -24,15 +28,31 @@ const state = {
   orbitPitch: 0.35,
   orbitRadius: 28,
   keys: new Set(),
+  carTracks: new Map(),
+  lastSnapshotAt: 0,
+  lastSnapshotGeneration: null,
+  lastSnapshotSimTime: null,
+  lastRoadKey: null,
+  activeTab: "sim",
+  sessionId: null,
+  leaderboardLoadedAt: 0,
+  selectedCarId: null,
+  selectedGeneSnapshot: null,
+  selectedCarSnapshot: null,
+  randomGene: null,
+  trails: new Map(),
+  trailGroup: new THREE.Group(),
 };
 
 const viewport = $("viewport");
 const scene = new THREE.Scene();
+scene.add(state.trailGroup);
 scene.background = new THREE.Color(0x050816);
 scene.fog = new THREE.Fog(0x050816, 72, 220);
 const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1000);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+const MAX_PIXEL_RATIO = 1.5;
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
 renderer.shadowMap.enabled = true;
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
@@ -56,7 +76,7 @@ camera.position.set(-6, 9, 20);
 
 function resize() {
   const rect = viewport.getBoundingClientRect();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
   renderer.setSize(rect.width, rect.height);
   camera.aspect = rect.width / Math.max(1, rect.height);
   camera.updateProjectionMatrix();
@@ -105,6 +125,7 @@ renderer.domElement.addEventListener("pointerup", (event) => {
     state.cameraMode = "follow";
     state.followId = carId;
     state.orbitTarget = null;
+    selectCarById(carId);
   } else {
     state.cameraMode = state.dragPrevMode;
     state.followId = state.dragPrevFollowId;
@@ -220,6 +241,7 @@ function syncMeshes(data) {
     if (!ids.has(id)) {
       scene.remove(mesh);
       state.meshes.delete(id);
+      removeTrail(id);
       if (state.followId === id) {
         state.followId = null;
         state.cameraMode = "auto";
@@ -235,13 +257,120 @@ function syncMeshes(data) {
   });
 }
 
-function updateMeshes(data) {
+function copyCarState(car) {
+  return {
+    ...car,
+    wheels: (car.wheels || []).map((wheel) => ({ ...wheel })),
+  };
+}
+
+function lerpAngle(a, b, t) {
+  const delta = Math.atan2(Math.sin(b - a), Math.cos(b - a));
+  return a + delta * t;
+}
+
+function interpolateCar(a, b, t) {
+  if (!a) return copyCarState(b);
+  const wheels = (b.wheels || []).map((wheel, i) => ({
+    ...wheel,
+    spin: THREE.MathUtils.lerp(a.wheels?.[i]?.spin ?? wheel.spin ?? 0, wheel.spin ?? 0, t),
+  }));
+  return {
+    ...b,
+    x: THREE.MathUtils.lerp(a.x, b.x, t),
+    y: THREE.MathUtils.lerp(a.y, b.y, t),
+    laneZ: THREE.MathUtils.lerp(a.laneZ, b.laneZ, t),
+    theta: lerpAngle(a.theta, b.theta, t),
+    maxX: THREE.MathUtils.lerp(a.maxX, b.maxX, t),
+    fitness: THREE.MathUtils.lerp(a.fitness, b.fitness, t),
+    wheels,
+  };
+}
+
+function sampleCarTrack(track, nowSeconds) {
+  if (!track) return null;
+  const t = track.duration > 0 ? THREE.MathUtils.clamp((nowSeconds - track.start) / track.duration, 0, 1) : 1;
+  return interpolateCar(track.from, track.to, t);
+}
+
+function removeTrail(id) {
+  const trail = state.trails.get(id);
+  if (!trail) return;
+  state.trailGroup.remove(trail.line);
+  trail.line.geometry.dispose();
+  trail.line.material.dispose();
+  state.trails.delete(id);
+}
+
+function clearTrails() {
+  [...state.trails.keys()].forEach(removeTrail);
+}
+
+function updateTrail(gene, car) {
+  if (!gene || !car || car.done) return;
+  let trail = state.trails.get(car.id);
+  if (!trail) {
+    const material = new THREE.LineBasicMaterial({ color: new THREE.Color(gene.color || "#ffffff"), transparent: true, opacity: 0.32 });
+    const line = new THREE.Line(new THREE.BufferGeometry(), material);
+    line.frustumCulled = false;
+    state.trailGroup.add(line);
+    trail = { points: [], line };
+    state.trails.set(car.id, trail);
+  }
+  const point = new THREE.Vector3(car.x, car.y + 0.08, car.laneZ);
+  const last = trail.points[trail.points.length - 1];
+  if (!last || last.distanceToSquared(point) > 0.12) {
+    trail.points.push(point);
+    if (trail.points.length > 70) trail.points.shift();
+    trail.line.geometry.dispose();
+    trail.line.geometry = new THREE.BufferGeometry().setFromPoints(trail.points);
+  }
+}
+
+function ingestSnapshot(data) {
   syncMeshes(data);
+  const now = performance.now() / 1000;
+  const roadKey = `${data.road?.seed ?? ""}:${data.road?.preset ?? ""}`;
+  const shouldSnap =
+    !state.lastSnapshotAt ||
+    data.generation !== state.lastSnapshotGeneration ||
+    data.simTime < (state.lastSnapshotSimTime ?? data.simTime) - 0.05 ||
+    (state.lastRoadKey && roadKey !== state.lastRoadKey);
+  const elapsed = state.lastSnapshotAt ? now - state.lastSnapshotAt : 1 / 24;
+  const duration = shouldSnap ? 0.001 : THREE.MathUtils.clamp(elapsed, 1 / 120, 0.14);
+  if (shouldSnap) clearTrails();
+  const liveIds = new Set();
+
+  data.cars.forEach((car) => {
+    liveIds.add(car.id);
+    const target = copyCarState(car);
+    const previous = state.carTracks.get(car.id);
+    const from = shouldSnap || !previous ? target : sampleCarTrack(previous, now);
+    state.carTracks.set(car.id, { from, to: target, start: now, duration });
+  });
+
+  for (const id of state.carTracks.keys()) {
+    if (!liveIds.has(id)) state.carTracks.delete(id);
+  }
+
+  state.lastSnapshotAt = now;
+  state.lastSnapshotGeneration = data.generation;
+  state.lastSnapshotSimTime = data.simTime;
+  state.lastRoadKey = roadKey;
+}
+
+function applyRenderedMeshes(dt) {
+  if (!state.data) return;
+  const now = performance.now() / 1000;
   let bestX = 0;
   let focusCar = null;
-  data.cars.forEach((car) => {
-    const mesh = state.meshes.get(car.id);
-    if (!mesh) return;
+  const geneById = new Map((state.data.population || []).map((gene) => [gene.id, gene]));
+
+  for (const [id, track] of state.carTracks) {
+    const mesh = state.meshes.get(id);
+    if (!mesh) continue;
+    const car = sampleCarTrack(track, now);
+    if (!car) continue;
     mesh.position.set(car.x, car.y, car.laneZ);
     mesh.rotation.set(0, 0, car.theta);
     mesh.visible = true;
@@ -253,12 +382,15 @@ function updateMeshes(data) {
       wheel.position.set(local.x, local.y, 0);
       wheel.rotation.z = car.wheels[i]?.spin || 0;
     });
-  });
-  state.followX = state.followX * 0.94 + Math.max(12, bestX) * 0.06;
+    updateTrail(geneById.get(id), car);
+  }
+
+  const followAlpha = 1 - Math.exp(-dt * 1.8);
+  state.followX = THREE.MathUtils.lerp(state.followX, Math.max(12, bestX), followAlpha);
   const desiredFocus = focusCar
     ? new THREE.Vector3(focusCar.x + 1.5, focusCar.y + 1.6, focusCar.laneZ)
     : new THREE.Vector3(Math.max(12, bestX), roadHeightAt(Math.max(12, bestX)) + 1.8, 0);
-  state.focusTarget.lerp(desiredFocus, 0.12);
+  state.focusTarget.lerp(desiredFocus, 1 - Math.exp(-dt * 4.0));
 }
 
 function roadHeightAt(x) {
@@ -447,6 +579,7 @@ function updateCamera(dt) {
 function render() {
   requestAnimationFrame(render);
   const dt = Math.min(0.08, clock.getDelta());
+  applyRenderedMeshes(dt);
   updateCamera(dt);
   renderer.render(scene, camera);
 }
@@ -499,19 +632,130 @@ function svgForGene(gene, carState = null, large = false) {
     const cx = layout.x(w.x);
     const cy = layout.y(w.y);
     const r = w.radius * layout.scale;
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="#111827" stroke="#e5e7eb" stroke-width="2"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
   }).join("");
   const w = layout.width;
   const h = layout.height;
   const yLine = Math.min(layout.plot.bottom + (large ? 16 : 6), h - (large ? 34 : 14));
   const score = carState ? `distance ${Math.max(0, carState.maxX - 4).toFixed(1)} | fitness ${carState.fitness.toFixed(1)}` : `uses ${Math.round(gene.used_power_fraction * 100)}% power`;
   return `<svg class="car-svg" viewBox="0 0 ${w} ${h}" role="img">
-    <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#334155" stroke-width="2" stroke-dasharray="5 4" />
+    <line x1="10" y1="${yLine}" x2="${w - 10}" y2="${yLine}" stroke="#525252" stroke-width="2" stroke-dasharray="5 4" />
     <polygon points="${pts}" fill="${gene.color}" stroke="#f8fafc" stroke-width="1.6" opacity="0.92" />
     ${wheelSvg}
-    <text x="10" y="16" fill="#94a3b8" font-size="${large ? 14 : 10}">${gene.id} · ${gene.lineage}</text>
-    <text x="10" y="${h - 8}" fill="#34d399" font-size="${large ? 14 : 10}">${score}</text>
+    <text x="10" y="16" fill="#a3a3a3" font-size="${large ? 14 : 10}">${gene.id} · ${gene.lineage}</text>
+    <text x="10" y="${h - 8}" fill="#e5e5e5" font-size="${large ? 14 : 10}">${score}</text>
   </svg>`;
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>\"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[ch]));
+}
+
+function exportedCarPayload(gene, source = "simulator") {
+  return {
+    type: "genetic-car-simulator.car",
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    source,
+    gene,
+  };
+}
+
+function extractGene(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("Import JSON must be an object.");
+  const gene = payload.gene && typeof payload.gene === "object" ? payload.gene : payload;
+  if (!Array.isArray(gene.body) || !Array.isArray(gene.wheels) || !gene.color) {
+    throw new Error("Import JSON does not look like an exported car gene.");
+  }
+  return gene;
+}
+
+function downloadGene(gene, source = "simulator") {
+  const payload = exportedCarPayload(gene, source);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `car-${gene.id || "gene"}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+
+async function importGene(gene, index = null) {
+  const slot = Number(index ?? $("import-slot")?.value ?? 0);
+  const data = await post("/api/import-car", { gene, index: slot });
+  state.data = data;
+  ingestSnapshot(data);
+  updateUI(data);
+  setTab("sim");
+}
+
+function geneStats(gene, car = null) {
+  const usedPower = gene.used_power_fraction ?? (gene.wheels || []).reduce((sum, w) => sum + Number(w.power_fraction || 0), 0);
+  return [
+    ["ID", gene.id],
+    ["Generation", gene.generation ?? "—"],
+    ["Lineage", gene.lineage || "—"],
+    ["Reproduction", gene.reproduction || "—"],
+    ["Fitness", Number(car?.fitness ?? gene.fitness ?? 0).toFixed(2)],
+    ["Distance", `${Math.max(0, Number(car?.maxX ?? 4) - 4 || gene.distance || 0).toFixed(2)}m`],
+    ["Time alive", `${Number(gene.time_alive || 0).toFixed(2)}s`],
+    ["Body points", (gene.body || []).length],
+    ["Wheels", (gene.wheels || []).length],
+    ["Power used", `${Math.round(usedPower * 100)}%`],
+    ["Width", Number(gene.width || 0).toFixed(2)],
+    ["Density", Number(gene.density || 0).toFixed(2)],
+  ];
+}
+
+function renderSelectedPanel(gene, car = null, source = "simulator") {
+  const panel = $("selected-car-panel");
+  if (!panel || !gene) return;
+  panel.classList.remove("hidden");
+  $("selected-car-title").textContent = `${gene.id || "car"} · ${source}`;
+  const stats = geneStats(gene, car).map(([key, value]) => `<div><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  $("selected-car-content").innerHTML = `
+    ${svgForGene(gene, car, true)}
+    <div class="stats-grid">${stats}</div>
+    <div class="selected-actions">
+      <button type="button" data-action="export-selected">Export JSON</button>
+      <button type="button" data-action="copy-selected">Copy JSON</button>
+      <button type="button" data-action="import-selected">Import into slot</button>
+    </div>
+    <details><summary>gene JSON</summary><pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre></details>
+  `;
+  state.selectedGeneSnapshot = gene;
+  state.selectedCarSnapshot = car;
+}
+
+function selectCarById(id) {
+  state.selectedCarId = id;
+  const gene = state.data?.population?.find((item) => item.id === id);
+  const car = state.data?.cars?.find((item) => item.id === id);
+  if (gene) renderSelectedPanel(gene, car, "simulator");
+}
+
+function selectDetachedGene(gene, source = "genealogy") {
+  state.selectedCarId = null;
+  renderSelectedPanel(gene, null, source);
+}
+
+function updateSelectedPanel(data) {
+  if (!state.selectedCarId) return;
+  const gene = data.population?.find((item) => item.id === state.selectedCarId);
+  if (!gene) return;
+  const car = data.cars?.find((item) => item.id === state.selectedCarId);
+  renderSelectedPanel(gene, car, "simulator");
+}
+
+function updateImportSlots(data) {
+  const select = $("import-slot");
+  if (!select || !data?.population) return;
+  const current = select.value;
+  select.innerHTML = data.population.map((gene, index) => `<option value="${index}">#${index} · ${escapeHtml(gene.id)}</option>`).join("");
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
 }
 
 function reproductionClass(value = "") {
@@ -520,10 +764,10 @@ function reproductionClass(value = "") {
 
 function reproductionColor(value = "") {
   const cls = reproductionClass(value);
-  if (cls.includes("elite")) return "#34d399";
-  if (cls.includes("copy")) return "#22d3ee";
-  if (cls.includes("crossover")) return "#fbbf24";
-  return "#94a3b8";
+  if (cls.includes("elite")) return "#f5f5f5";
+  if (cls.includes("copy")) return "#d4d4d4";
+  if (cls.includes("crossover")) return "#a3a3a3";
+  return "#737373";
 }
 
 function miniGenePreview(car) {
@@ -540,10 +784,10 @@ function miniGenePreview(car) {
     const x = (w.x - cx) * scale;
     const y = -(w.y - cy) * scale;
     const r = Math.max(2.2, w.radius * scale);
-    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111827" stroke="#e5e7eb" stroke-width="0.8" />`;
+    return `<circle cx="${x.toFixed(1)}" cy="${y.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="0.8" />`;
   }).join("");
   return `<g transform="translate(0,30)">
-    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#07111f" stroke="#334155" />
+    <rect x="-30" y="-18" width="60" height="38" rx="6" fill="#111111" stroke="#525252" />
     <polygon points="${pts}" fill="${car.color}" stroke="#fff" stroke-width="0.9" opacity="0.92" />
     ${wheels}
   </g>`;
@@ -585,7 +829,7 @@ function updateGenealogy(data) {
     const cls = reproductionClass(e.reproduction);
     return `<path class="gene-edge ${cls}" d="M ${x1} ${y1} C ${mid} ${y1}, ${mid} ${y2}, ${x2} ${y2}" />`;
   }).join("");
-  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#94a3b8" font-size="12" font-weight="700">Gen ${gen.generation}</text>`).join("");
+  const generationLabels = generations.map((gen, gi) => `<text x="${marginX + gi * colW - 22}" y="24" fill="#a3a3a3" font-size="12" font-weight="700">Gen ${gen.generation}</text>`).join("");
   const nodeSvg = generations.flatMap((gen) => gen.cars.map((car, ci) => {
     const node = nodeById.get(car.id);
     const p = pos(node);
@@ -595,10 +839,10 @@ function updateGenealogy(data) {
     return `<g class="gene-node ${removed ? "removed" : ""}" data-gene-id="${car.id}" transform="translate(${p.x},${p.y})">
       <title>${title}</title>
       <circle r="18" fill="${color}" stroke="#f8fafc" stroke-width="1.2" />
-      <text x="0" y="4" text-anchor="middle" fill="#0b1220" font-weight="700">${ci + 1}</text>
+      <text x="0" y="4" text-anchor="middle" fill="#050505" font-weight="700">${ci + 1}</text>
       <text x="25" y="-4">${car.id}</text>
-      <text x="25" y="11" fill="#8b949e">${car.reproduction || car.lineage}</text>
-      <text x="25" y="26" fill="#34d399">fit ${Number(car.fitness || 0).toFixed(1)}</text>
+      <text x="25" y="11" fill="#a3a3a3">${car.reproduction || car.lineage}</text>
+      <text x="25" y="26" fill="#e5e5e5">fit ${Number(car.fitness || 0).toFixed(1)}</text>
       ${miniGenePreview(car)}
     </g>`;
   })).join("");
@@ -606,14 +850,118 @@ function updateGenealogy(data) {
   holder.querySelectorAll(".gene-node").forEach((node) => {
     node.addEventListener("click", () => {
       const gene = nodeById.get(node.dataset.geneId);
-      $("genealogy-details").textContent = JSON.stringify(gene, null, 2);
+      const details = $("genealogy-details");
+      details.innerHTML = `
+        ${svgForGene(gene, null, false)}
+        <div class="selected-actions"><button type="button" data-action="export-genealogy">Export JSON</button><button type="button" data-action="import-genealogy">Import into slot</button></div>
+        <pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre>
+      `;
+      details.querySelector('[data-action="export-genealogy"]').addEventListener("click", () => downloadGene(gene, "genealogy"));
+      details.querySelector('[data-action="import-genealogy"]').addEventListener("click", () => fire(importGene(gene)));
+      selectDetachedGene(gene, "genealogy");
     });
   });
 }
 
+function timeAgo(timestampSeconds) {
+  if (!timestampSeconds) return "unknown";
+  const seconds = Math.max(0, Date.now() / 1000 - timestampSeconds);
+  if (seconds < 60) return "just now";
+  if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
+  if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
+  return `${Math.floor(seconds / 86400)}d ago`;
+}
+
+async function refreshLeaderboard(force = false) {
+  const holder = $("leaderboard-list");
+  if (!holder) return;
+  const now = performance.now();
+  if (!force && state.leaderboardLoadedAt && now - state.leaderboardLoadedAt < 5000) return;
+  holder.textContent = "Loading leaderboard…";
+  const res = await fetch("/api/leaderboard", { credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  state.leaderboardLoadedAt = now;
+  state.leaderboardData = data;
+  holder.innerHTML = (data.maps || []).map((map) => {
+    const entries = map.entries || [];
+    const rows = entries.length ? entries.map((entry, index) => `
+      <article class="leaderboard-entry ${entry.isCurrentUser ? "current-user" : ""}" data-map-id="${escapeHtml(map.id)}" data-entry-index="${index}">
+        <div class="leaderboard-rank">#${index + 1}</div>
+        <div class="leaderboard-preview">${svgForGene(entry.gene, null, false)}</div>
+        <div class="leaderboard-meta">
+          <strong class="leaderboard-name" title="${entry.isCurrentUser ? "Click to edit your nickname" : ""}">${escapeHtml(entry.displayName || "visitor")}${entry.isCurrentUser ? " <span class=\"you-marker\">you</span>" : ""}</strong>
+          <span>fitness ${Number(entry.fitness || 0).toFixed(1)} · distance ${Number(entry.distance || 0).toFixed(1)}m · gen ${entry.generation ?? 0}</span>
+          <span>${escapeHtml(entry.carId || "car")} · ${timeAgo(entry.recordedAt)}</span>
+          <span class="leaderboard-actions"><button type="button" data-action="export-leaderboard">Export</button><button type="button" data-action="import-leaderboard">Import</button></span>
+        </div>
+      </article>
+    `).join("") : `<p class="small-note">No records yet for this map.</p>`;
+    return `<section class="leaderboard-map">
+      <div class="leaderboard-map-heading"><h3>${escapeHtml(map.label)}</h3><span>${entries.length}/10 records</span></div>
+      ${rows}
+    </section>`;
+  }).join("");
+  holder.querySelectorAll(".leaderboard-entry").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      const map = (state.leaderboardData.maps || []).find((item) => item.id === row.dataset.mapId);
+      const entry = map?.entries?.[Number(row.dataset.entryIndex)];
+      if (!entry) return;
+      const action = event.target?.dataset?.action;
+      const nameClick = event.target?.closest?.(".leaderboard-name");
+      if (action === "export-leaderboard") {
+        downloadGene(entry.gene, "leaderboard");
+      } else if (action === "import-leaderboard") {
+        fire(importGene(entry.gene));
+      } else if (nameClick && entry.isCurrentUser) {
+        fire(editLeaderboardName(entry.displayName || ""));
+      } else {
+        selectDetachedGene(entry.gene, "leaderboard");
+      }
+    });
+  });
+}
+
+async function editLeaderboardName(currentName) {
+  const next = prompt("Leaderboard nickname", currentName || "");
+  if (next === null) return;
+  const res = await post("/api/leaderboard/name", { display_name: next });
+  state.leaderboardData = res;
+  state.leaderboardLoadedAt = 0;
+  await refreshLeaderboard(true);
+}
+
+function formatSpeed(value) {
+  return `${Number(value).toFixed(Number(value) < 10 ? 2 : 0)}×`;
+}
+
+function setSpeedControl(value) {
+  const speed = Number(value || DEFAULT_SPEED);
+  const input = $("speed");
+  const isEditing = input && document.activeElement === input;
+  if (input && !isEditing) input.value = String(speed);
+  if ($("speed-label") && !isEditing) $("speed-label").textContent = formatSpeed(speed);
+}
+
+function resetTransientControls() {
+  setSpeedControl(DEFAULT_SPEED);
+  const mutation = $("mutation");
+  if (mutation) mutation.value = String(DEFAULT_MUTATION_RATE);
+  if ($("mutation-label")) $("mutation-label").textContent = DEFAULT_MUTATION_RATE.toFixed(2);
+  if ($("import-json")) $("import-json").value = "";
+  if ($("import-file")) $("import-file").value = "";
+}
+
 function updateUI(data) {
   $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.autoEvolve ? "auto-evolving" : data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
+  setSpeedControl(data.speed);
   if ($("map-select") && data.road?.preset && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
+  if ($("start")) {
+    const isRunning = !!(data.running || data.autoEvolve);
+    $("start").textContent = isRunning ? "Pause" : "Start";
+    $("start").classList.toggle("running", isRunning);
+    $("start").title = isRunning ? "Pause this simulation" : "Start a fresh evaluation from scratch";
+  }
   if ($("auto-evolve")) {
     $("auto-evolve").textContent = data.autoEvolve ? "Stop auto-run" : "Auto-run generations";
     $("auto-evolve").classList.toggle("running", !!data.autoEvolve);
@@ -621,28 +969,42 @@ function updateUI(data) {
   const bestCar = [...data.cars].sort((a, b) => b.fitness - a.fitness)[0];
   $("best").textContent = bestCar ? `best ${bestCar.id}: ${bestCar.fitness.toFixed(1)} (${Math.max(0, bestCar.maxX - 4).toFixed(1)}m)` : "best: —";
   const list = $("cars-list");
-  updateGenealogy(data);
+  updateImportSlots(data);
+  updateSelectedPanel(data);
+  if (state.activeTab === "genealogy") updateGenealogy(data);
   list.innerHTML = data.population.map((gene) => {
     const car = data.cars.find((c) => c.id === gene.id);
-    const cls = car?.done ? (car.reason === "crashed" ? "done crashed" : "done") : "";
-    return `<article class="car-card ${cls}">
-      <div class="car-top"><strong>#${car?.index ?? "?"} ${gene.id}</strong><span class="metric">${(car?.fitness ?? gene.fitness).toFixed(1)}</span></div>
-      <div class="badge">${gene.lineage} · ${gene.wheels.length} wheels · power ${Math.round(gene.used_power_fraction * 100)}% · ${car?.reason || "evaluating"}</div>
+    const cls = [car?.done ? (car.reason === "crashed" ? "done crashed" : "done") : "", state.selectedCarId === gene.id ? "selected" : ""].join(" ");
+    return `<article class="car-card ${cls}" data-car-id="${escapeHtml(gene.id)}">
+      <div class="car-top"><strong>#${car?.index ?? "?"} ${escapeHtml(gene.id)}</strong><span class="metric">${(car?.fitness ?? gene.fitness).toFixed(1)}</span></div>
+      <div class="badge">${escapeHtml(gene.lineage)} · ${gene.wheels.length} wheels · power ${Math.round(gene.used_power_fraction * 100)}% · ${escapeHtml(car?.reason || "evaluating")}</div>
       ${svgForGene(gene, car)}
-      <details><summary>gene</summary><pre>${JSON.stringify(gene, null, 2)}</pre></details>
+      <div class="card-actions"><button type="button" data-action="export-main">Export</button><button type="button" data-action="import-main">Duplicate to slot</button></div>
+      <details><summary>gene</summary><pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre></details>
     </article>`;
   }).join("");
+  list.querySelectorAll(".car-card").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      const id = card.dataset.carId;
+      const gene = data.population.find((item) => item.id === id);
+      if (!gene) return;
+      if (event.target?.dataset?.action === "export-main") downloadGene(gene, "simulator");
+      else if (event.target?.dataset?.action === "import-main") fire(importGene(gene));
+      else selectCarById(id);
+    });
+  });
 }
 
 function connectWs() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
-  const ws = new WebSocket(`${protocol}://${location.host}/ws/sim`);
+  const sessionQuery = state.sessionId ? `?session=${encodeURIComponent(state.sessionId)}` : "";
+  const ws = new WebSocket(`${protocol}://${location.host}/ws/sim${sessionQuery}`);
   ws.onmessage = (event) => {
     const data = JSON.parse(event.data);
     state.data = data;
-    updateMeshes(data);
+    ingestSnapshot(data);
     const now = performance.now();
-    if (!state.lastUi || now - state.lastUi > 300 || state.lastGeneration !== data.generation || state.lastRunning !== data.running) {
+    if (!state.lastUi || now - state.lastUi > 500 || state.lastGeneration !== data.generation || state.lastRunning !== data.running) {
       updateUI(data);
       state.lastUi = now;
       state.lastGeneration = data.generation;
@@ -651,10 +1013,16 @@ function connectWs() {
   };
   ws.onclose = () => setTimeout(connectWs, 1000);
 }
-connectWs();
+
+async function initSession() {
+  const res = await fetch("/api/session", { method: "POST", credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const data = await res.json();
+  state.sessionId = data.sessionId;
+}
 
 async function post(url, body) {
-  const res = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
@@ -666,8 +1034,40 @@ function fire(promise) {
   });
 }
 
-$("start").addEventListener("click", () => fire(post("/api/start")));
-$("pause").addEventListener("click", () => fire(post("/api/pause")));
+function parseImportText(text) {
+  return extractGene(JSON.parse(text));
+}
+
+$("selected-car-content")?.addEventListener("click", (event) => {
+  const action = event.target?.dataset?.action;
+  if (!action || !state.selectedGeneSnapshot) return;
+  if (action === "export-selected") downloadGene(state.selectedGeneSnapshot, "selected");
+  if (action === "copy-selected") {
+    const payload = JSON.stringify(exportedCarPayload(state.selectedGeneSnapshot, "selected"), null, 2);
+    fire(navigator.clipboard.writeText(payload));
+  }
+  if (action === "import-selected") fire(importGene(state.selectedGeneSnapshot));
+});
+
+$("import-file")?.addEventListener("change", async (event) => {
+  const file = event.target.files?.[0];
+  if (!file) return;
+  $("import-json").value = await file.text();
+});
+
+$("import-car")?.addEventListener("click", () => {
+  try {
+    const gene = parseImportText($("import-json").value);
+    fire(importGene(gene));
+  } catch (err) {
+    $("status").textContent = `import failed: ${err.message || err}`;
+  }
+});
+
+$("start").addEventListener("click", () => {
+  const isRunning = !!(state.data?.running || state.data?.autoEvolve);
+  fire(post(isRunning ? "/api/pause" : "/api/start"));
+});
 $("randomize").addEventListener("click", () => fire(post("/api/randomize")));
 $("evolve").addEventListener("click", () => fire(post("/api/evolve", { elite_count: 2, copy_count: 1, mutation_rate: Number($("mutation").value) })));
 $("auto-evolve").addEventListener("click", () => {
@@ -676,30 +1076,59 @@ $("auto-evolve").addEventListener("click", () => {
 });
 $("speed").addEventListener("input", (event) => {
   const value = Number(event.target.value);
-  $("speed-label").textContent = `${value.toFixed(value < 10 ? 2 : 0)}×`;
+  $("speed-label").textContent = formatSpeed(value);
   fire(post("/api/speed", { speed: value }));
 });
 $("map-select").addEventListener("change", (event) => fire(post("/api/map", { preset: event.target.value })));
 $("mutation").addEventListener("input", (event) => { $("mutation-label").textContent = Number(event.target.value).toFixed(2); });
 
 function setTab(name) {
+  state.activeTab = name;
   $("simulation-view").classList.toggle("active", name === "sim");
   $("random-view").classList.toggle("active", name === "random");
   $("genealogy-view").classList.toggle("active", name === "genealogy");
+  $("leaderboard-view").classList.toggle("active", name === "leaderboard");
   $("tab-sim").classList.toggle("active", name === "sim");
   $("tab-random").classList.toggle("active", name === "random");
   $("tab-genealogy").classList.toggle("active", name === "genealogy");
+  $("tab-leaderboard").classList.toggle("active", name === "leaderboard");
   if (name === "genealogy" && state.data) updateGenealogy(state.data);
+  if (name === "leaderboard") fire(refreshLeaderboard(true));
   setTimeout(resize, 0);
 }
 $("tab-sim").addEventListener("click", () => setTab("sim"));
 $("tab-random").addEventListener("click", () => setTab("random"));
 $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
+$("tab-leaderboard").addEventListener("click", () => setTab("leaderboard"));
 
 async function generateOne() {
-  const gene = await (await fetch("/api/random-car")).json();
+  const res = await fetch("/api/random-car", { credentials: "same-origin" });
+  if (!res.ok) throw new Error(await res.text());
+  const gene = await res.json();
+  state.randomGene = gene;
   $("random-svg").innerHTML = svgForGene(gene, null, true);
   $("random-json").textContent = JSON.stringify(gene, null, 2);
+  if ($("export-random")) $("export-random").disabled = false;
 }
-$("generate-one").addEventListener("click", generateOne);
-generateOne();
+$("generate-one").addEventListener("click", () => fire(generateOne()));
+$("export-random")?.addEventListener("click", () => {
+  if (state.randomGene) downloadGene(state.randomGene, "random-lab");
+});
+
+async function boot() {
+  try {
+    resetTransientControls();
+    await initSession();
+    try {
+      await post("/api/speed", { speed: DEFAULT_SPEED });
+    } catch (err) {
+      console.warn("could not reset transient speed setting", err);
+    }
+    connectWs();
+    await generateOne();
+  } catch (err) {
+    console.error(err);
+    $("status").textContent = `session setup failed: ${err.message || err}`;
+  }
+}
+boot();

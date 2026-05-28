@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "build": "vite build",
     "typecheck": "tsc --noEmit"
   },
   "devDependencies": {
     "typescript": "^5.7.2",
+    "vite": "^5.4.11",
     "three": "^0.160.0",
     "@types/three": "^0.160.0"
   }

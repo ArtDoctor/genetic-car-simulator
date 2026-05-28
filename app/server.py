@@ -193,6 +193,15 @@ class AutoEvolvePayload(BaseModel):
     mutation_rate: float = 0.22
 
 
+class ImportCarPayload(BaseModel):
+    gene: dict[str, Any]
+    index: int
+
+
+class LeaderboardNamePayload(BaseModel):
+    display_name: str
+
+
 async def current_manager(request: Request, response: Response) -> SimulationProcess:
     _, manager = await sessions.get_for_http(request, response)
     return manager
@@ -220,8 +229,9 @@ async def road(manager: SimulationProcess = Depends(current_manager)) -> dict[st
 
 
 @app.get("/api/leaderboard")
-async def leaderboard_state() -> dict[str, Any]:
-    return await leaderboard.snapshot()
+async def leaderboard_state(request: Request, response: Response) -> dict[str, Any]:
+    session_id, _ = await sessions.get_for_http(request, response)
+    return await leaderboard.snapshot(session_id)
 
 
 @app.get("/api/random-car")
@@ -269,6 +279,19 @@ async def set_map(payload: MapPayload, manager: SimulationProcess = Depends(curr
 async def evolve(payload: EvolvePayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
     await manager.evolve(payload.elite_count, payload.copy_count, payload.mutation_rate)
     return await manager.snapshot()
+
+
+@app.post("/api/import-car")
+async def import_car(payload: ImportCarPayload, manager: SimulationProcess = Depends(current_manager)) -> dict[str, Any]:
+    await manager.import_car(payload.gene, payload.index)
+    return await manager.snapshot()
+
+
+@app.post("/api/leaderboard/name")
+async def set_leaderboard_name(payload: LeaderboardNamePayload, request: Request, response: Response) -> dict[str, Any]:
+    session_id, _ = await sessions.get_for_http(request, response)
+    await leaderboard.set_display_name(session_id, payload.display_name)
+    return await leaderboard.snapshot(session_id)
 
 
 @app.post("/api/auto-evolve")

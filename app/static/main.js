@@ -1,9 +1,11 @@
+var _a, _b, _c, _d;
 import * as THREE from "three";
-
 const $ = (id) => document.getElementById(id);
+const DEFAULT_SPEED = 1;
+const DEFAULT_MUTATION_RATE = 0.22;
 const state = {
   data: null,
-  meshes: new Map(),
+  meshes: /* @__PURE__ */ new Map(),
   roadMesh: null,
   followX: 12,
   focusTarget: new THREE.Vector3(12, 1.8, 0),
@@ -23,8 +25,8 @@ const state = {
   orbitYaw: -0.8,
   orbitPitch: 0.35,
   orbitRadius: 28,
-  keys: new Set(),
-  carTracks: new Map(),
+  keys: /* @__PURE__ */ new Set(),
+  carTracks: /* @__PURE__ */ new Map(),
   lastSnapshotAt: 0,
   lastSnapshotGeneration: null,
   lastSnapshotSimTime: null,
@@ -32,13 +34,19 @@ const state = {
   activeTab: "sim",
   sessionId: null,
   leaderboardLoadedAt: 0,
+  selectedCarId: null,
+  selectedGeneSnapshot: null,
+  selectedCarSnapshot: null,
+  randomGene: null,
+  trails: /* @__PURE__ */ new Map(),
+  trailGroup: new THREE.Group()
 };
-
 const viewport = $("viewport");
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x050816);
-scene.fog = new THREE.Fog(0x050816, 72, 220);
-const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1000);
+scene.add(state.trailGroup);
+scene.background = new THREE.Color(329750);
+scene.fog = new THREE.Fog(329750, 72, 220);
+const camera = new THREE.PerspectiveCamera(58, 1, 0.1, 1e3);
 const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
 const MAX_PIXEL_RATIO = 1.5;
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
@@ -47,14 +55,13 @@ renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.05;
 viewport.appendChild(renderer.domElement);
-
-const hemi = new THREE.HemisphereLight(0xc7ddff, 0x0c1020, 2.6);
+const hemi = new THREE.HemisphereLight(13098495, 790560, 2.6);
 scene.add(hemi);
-const sun = new THREE.DirectionalLight(0xffffff, 2.35);
+const sun = new THREE.DirectionalLight(16777215, 2.35);
 sun.position.set(12, 28, 18);
 sun.castShadow = true;
 scene.add(sun);
-const grid = new THREE.GridHelper(700, 70, 0x29364d, 0x111827);
+const grid = new THREE.GridHelper(700, 70, 2700877, 1120295);
 grid.rotation.x = Math.PI / 2;
 grid.position.y = -2.5;
 scene.add(grid);
@@ -62,7 +69,6 @@ const clock = new THREE.Clock();
 const raycaster = new THREE.Raycaster();
 const pointer = new THREE.Vector2();
 camera.position.set(-6, 9, 20);
-
 function resize() {
   const rect = viewport.getBoundingClientRect();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, MAX_PIXEL_RATIO));
@@ -72,7 +78,6 @@ function resize() {
 }
 window.addEventListener("resize", resize);
 resize();
-
 window.addEventListener("keydown", (event) => {
   if (["KeyW", "KeyA", "KeyS", "KeyD", "KeyQ", "KeyE", "Space", "ControlLeft", "ShiftLeft", "ShiftRight"].includes(event.code)) {
     state.keys.add(event.code);
@@ -85,7 +90,6 @@ window.addEventListener("keydown", (event) => {
   }
 });
 window.addEventListener("keyup", (event) => state.keys.delete(event.code));
-
 renderer.domElement.addEventListener("pointerdown", (event) => {
   if (event.button !== 0) return;
   state.dragging = true;
@@ -93,7 +97,7 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
   state.dragStart = { x: event.clientX, y: event.clientY };
   state.dragPrevMode = state.cameraMode;
   state.dragPrevFollowId = state.followId;
-  beginOrbitDrag(event);
+  beginOrbitDrag();
   renderer.domElement.setPointerCapture(event.pointerId);
 });
 renderer.domElement.addEventListener("pointermove", (event) => {
@@ -114,6 +118,7 @@ renderer.domElement.addEventListener("pointerup", (event) => {
     state.cameraMode = "follow";
     state.followId = carId;
     state.orbitTarget = null;
+    selectCarById(carId);
   } else {
     state.cameraMode = state.dragPrevMode;
     state.followId = state.dragPrevFollowId;
@@ -123,9 +128,7 @@ renderer.domElement.addEventListener("wheel", (event) => {
   event.preventDefault();
   const zoomDelta = event.deltaY * 0.035;
   if (state.cameraMode === "follow" || state.cameraMode === "followOrbit") {
-    const target = state.followId && state.meshes.has(state.followId)
-      ? state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0))
-      : roadCenterTarget();
+    const target = state.followId && state.meshes.has(state.followId) ? state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0)) : roadCenterTarget();
     syncOrbitFromTarget(target);
     state.cameraMode = "followOrbit";
     state.orbitRadius = THREE.MathUtils.clamp(state.orbitRadius + zoomDelta, 2.2, 180);
@@ -135,7 +138,6 @@ renderer.domElement.addEventListener("wheel", (event) => {
   state.autoOrbitRadius = THREE.MathUtils.clamp(state.autoOrbitRadius + zoomDelta, 5, 180);
   state.cameraMode = "auto";
 }, { passive: false });
-
 function makeRoad(road) {
   if (state.roadMesh) scene.remove(state.roadMesh);
   const verts = [];
@@ -152,26 +154,23 @@ function makeRoad(road) {
   geom.setAttribute("position", new THREE.Float32BufferAttribute(verts, 3));
   geom.setIndex(indices);
   geom.computeVertexNormals();
-  const mat = new THREE.MeshStandardMaterial({ color: 0x243022, roughness: 0.94, metalness: 0.02, side: THREE.DoubleSide });
+  const mat = new THREE.MeshStandardMaterial({ color: 2371618, roughness: 0.94, metalness: 0.02, side: THREE.DoubleSide });
   state.roadMesh = new THREE.Mesh(geom, mat);
   state.roadMesh.receiveShadow = true;
   scene.add(state.roadMesh);
-
   const linePts = road.samples.map(([x, y]) => new THREE.Vector3(x, y + 0.02, -half - 0.05));
-  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), new THREE.LineBasicMaterial({ color: 0x22d3ee }));
+  const line = new THREE.Line(new THREE.BufferGeometry().setFromPoints(linePts), new THREE.LineBasicMaterial({ color: 2282478 }));
   state.roadMesh.add(line);
 }
-
 function shapeGeometry(gene) {
   const shape = new THREE.Shape();
-  gene.body.forEach(([x, y], i) => (i ? shape.lineTo(x, y) : shape.moveTo(x, y)));
+  gene.body.forEach(([x, y], i) => i ? shape.lineTo(x, y) : shape.moveTo(x, y));
   shape.closePath();
   const geom = new THREE.ExtrudeGeometry(shape, { depth: gene.width, bevelEnabled: true, bevelThickness: 0.025, bevelSize: 0.025, bevelSegments: 1 });
   geom.translate(0, 0, -gene.width / 2);
   geom.computeVertexNormals();
   return geom;
 }
-
 function makeCarMesh(gene) {
   const group = new THREE.Group();
   group.userData.carId = gene.id;
@@ -182,9 +181,9 @@ function makeCarMesh(gene) {
   body.castShadow = true;
   body.userData.carId = gene.id;
   group.add(body);
-  const wheelMat = new THREE.MeshStandardMaterial({ color: 0x0b1020, roughness: 0.88 });
-  const hubMat = new THREE.MeshStandardMaterial({ color: 0xe2e8f0, roughness: 0.45, metalness: 0.08 });
-  const axleMat = new THREE.MeshStandardMaterial({ color: 0x94a3b8, roughness: 0.58, metalness: 0.04 });
+  const wheelMat = new THREE.MeshStandardMaterial({ color: 725024, roughness: 0.88 });
+  const hubMat = new THREE.MeshStandardMaterial({ color: 14870768, roughness: 0.45, metalness: 0.08 });
+  const axleMat = new THREE.MeshStandardMaterial({ color: 9741240, roughness: 0.58, metalness: 0.04 });
   const wheelGroups = [];
   gene.wheels.forEach((w) => {
     const wheel = new THREE.Group();
@@ -217,7 +216,6 @@ function makeCarMesh(gene) {
   group.userData.wheelGroups = wheelGroups;
   return group;
 }
-
 function syncMeshes(data) {
   if (!state.roadMesh || state.roadSeed !== data.road.seed || state.roadPreset !== data.road.preset) {
     state.roadSeed = data.road.seed;
@@ -229,6 +227,7 @@ function syncMeshes(data) {
     if (!ids.has(id)) {
       scene.remove(mesh);
       state.meshes.delete(id);
+      removeTrail(id);
       if (state.followId === id) {
         state.followId = null;
         state.cameraMode = "auto";
@@ -243,25 +242,25 @@ function syncMeshes(data) {
     }
   });
 }
-
 function copyCarState(car) {
   return {
     ...car,
-    wheels: (car.wheels || []).map((wheel) => ({ ...wheel })),
+    wheels: (car.wheels || []).map((wheel) => ({ ...wheel }))
   };
 }
-
 function lerpAngle(a, b, t) {
   const delta = Math.atan2(Math.sin(b - a), Math.cos(b - a));
   return a + delta * t;
 }
-
 function interpolateCar(a, b, t) {
   if (!a) return copyCarState(b);
-  const wheels = (b.wheels || []).map((wheel, i) => ({
-    ...wheel,
-    spin: THREE.MathUtils.lerp(a.wheels?.[i]?.spin ?? wheel.spin ?? 0, wheel.spin ?? 0, t),
-  }));
+  const wheels = (b.wheels || []).map((wheel, i) => {
+    var _a2, _b2;
+    return {
+      ...wheel,
+      spin: THREE.MathUtils.lerp(((_b2 = (_a2 = a.wheels) == null ? void 0 : _a2[i]) == null ? void 0 : _b2.spin) ?? wheel.spin ?? 0, wheel.spin ?? 0, t)
+    };
+  });
   return {
     ...b,
     x: THREE.MathUtils.lerp(a.x, b.x, t),
@@ -270,29 +269,55 @@ function interpolateCar(a, b, t) {
     theta: lerpAngle(a.theta, b.theta, t),
     maxX: THREE.MathUtils.lerp(a.maxX, b.maxX, t),
     fitness: THREE.MathUtils.lerp(a.fitness, b.fitness, t),
-    wheels,
+    wheels
   };
 }
-
 function sampleCarTrack(track, nowSeconds) {
   if (!track) return null;
   const t = track.duration > 0 ? THREE.MathUtils.clamp((nowSeconds - track.start) / track.duration, 0, 1) : 1;
   return interpolateCar(track.from, track.to, t);
 }
-
+function removeTrail(id) {
+  const trail = state.trails.get(id);
+  if (!trail) return;
+  state.trailGroup.remove(trail.line);
+  trail.line.geometry.dispose();
+  trail.line.material.dispose();
+  state.trails.delete(id);
+}
+function clearTrails() {
+  [...state.trails.keys()].forEach(removeTrail);
+}
+function updateTrail(gene, car) {
+  if (!gene || !car || car.done) return;
+  let trail = state.trails.get(car.id);
+  if (!trail) {
+    const material = new THREE.LineBasicMaterial({ color: new THREE.Color(gene.color || "#ffffff"), transparent: true, opacity: 0.32 });
+    const line = new THREE.Line(new THREE.BufferGeometry(), material);
+    line.frustumCulled = false;
+    state.trailGroup.add(line);
+    trail = { points: [], line };
+    state.trails.set(car.id, trail);
+  }
+  const point = new THREE.Vector3(car.x, car.y + 0.08, car.laneZ);
+  const last = trail.points[trail.points.length - 1];
+  if (!last || last.distanceToSquared(point) > 0.12) {
+    trail.points.push(point);
+    if (trail.points.length > 70) trail.points.shift();
+    trail.line.geometry.dispose();
+    trail.line.geometry = new THREE.BufferGeometry().setFromPoints(trail.points);
+  }
+}
 function ingestSnapshot(data) {
+  var _a2, _b2;
   syncMeshes(data);
-  const now = performance.now() / 1000;
-  const roadKey = `${data.road?.seed ?? ""}:${data.road?.preset ?? ""}`;
-  const shouldSnap =
-    !state.lastSnapshotAt ||
-    data.generation !== state.lastSnapshotGeneration ||
-    data.simTime < (state.lastSnapshotSimTime ?? data.simTime) - 0.05 ||
-    (state.lastRoadKey && roadKey !== state.lastRoadKey);
+  const now = performance.now() / 1e3;
+  const roadKey = `${((_a2 = data.road) == null ? void 0 : _a2.seed) ?? ""}:${((_b2 = data.road) == null ? void 0 : _b2.preset) ?? ""}`;
+  const shouldSnap = !state.lastSnapshotAt || data.generation !== state.lastSnapshotGeneration || data.simTime < (state.lastSnapshotSimTime ?? data.simTime) - 0.05 || state.lastRoadKey && roadKey !== state.lastRoadKey;
   const elapsed = state.lastSnapshotAt ? now - state.lastSnapshotAt : 1 / 24;
-  const duration = shouldSnap ? 0.001 : THREE.MathUtils.clamp(elapsed, 1 / 120, 0.14);
-  const liveIds = new Set();
-
+  const duration = shouldSnap ? 1e-3 : THREE.MathUtils.clamp(elapsed, 1 / 120, 0.14);
+  if (shouldSnap) clearTrails();
+  const liveIds = /* @__PURE__ */ new Set();
   data.cars.forEach((car) => {
     liveIds.add(car.id);
     const target = copyCarState(car);
@@ -300,23 +325,20 @@ function ingestSnapshot(data) {
     const from = shouldSnap || !previous ? target : sampleCarTrack(previous, now);
     state.carTracks.set(car.id, { from, to: target, start: now, duration });
   });
-
   for (const id of state.carTracks.keys()) {
     if (!liveIds.has(id)) state.carTracks.delete(id);
   }
-
   state.lastSnapshotAt = now;
   state.lastSnapshotGeneration = data.generation;
   state.lastSnapshotSimTime = data.simTime;
   state.lastRoadKey = roadKey;
 }
-
 function applyRenderedMeshes(dt) {
   if (!state.data) return;
-  const now = performance.now() / 1000;
+  const now = performance.now() / 1e3;
   let bestX = 0;
   let focusCar = null;
-
+  const geneById = new Map((state.data.population || []).map((gene) => [gene.id, gene]));
   for (const [id, track] of state.carTracks) {
     const mesh = state.meshes.get(id);
     if (!mesh) continue;
@@ -329,39 +351,36 @@ function applyRenderedMeshes(dt) {
     if (!focusCar || car.maxX > focusCar.maxX) focusCar = car;
     const wheels = mesh.userData.wheelGroups || [];
     wheels.forEach((wheel, i) => {
+      var _a2;
       const local = wheel.userData.local;
       wheel.position.set(local.x, local.y, 0);
-      wheel.rotation.z = car.wheels[i]?.spin || 0;
+      wheel.rotation.z = ((_a2 = car.wheels[i]) == null ? void 0 : _a2.spin) || 0;
     });
+    updateTrail(geneById.get(id), car);
   }
-
   const followAlpha = 1 - Math.exp(-dt * 1.8);
   state.followX = THREE.MathUtils.lerp(state.followX, Math.max(12, bestX), followAlpha);
-  const desiredFocus = focusCar
-    ? new THREE.Vector3(focusCar.x + 1.5, focusCar.y + 1.6, focusCar.laneZ)
-    : new THREE.Vector3(Math.max(12, bestX), roadHeightAt(Math.max(12, bestX)) + 1.8, 0);
-  state.focusTarget.lerp(desiredFocus, 1 - Math.exp(-dt * 4.0));
+  const desiredFocus = focusCar ? new THREE.Vector3(focusCar.x + 1.5, focusCar.y + 1.6, focusCar.laneZ) : new THREE.Vector3(Math.max(12, bestX), roadHeightAt(Math.max(12, bestX)) + 1.8, 0);
+  state.focusTarget.lerp(desiredFocus, 1 - Math.exp(-dt * 4));
 }
-
 function roadHeightAt(x) {
-  const samples = state.data?.road?.samples;
-  if (!samples?.length) return 0;
+  var _a2, _b2;
+  const samples = (_b2 = (_a2 = state.data) == null ? void 0 : _a2.road) == null ? void 0 : _b2.samples;
+  if (!(samples == null ? void 0 : samples.length)) return 0;
   if (x <= samples[0][0]) return samples[0][1];
   for (let i = 1; i < samples.length; i++) {
     if (x <= samples[i][0]) {
       const [x0, y0] = samples[i - 1];
       const [x1, y1] = samples[i];
-      const t = (x - x0) / Math.max(0.0001, x1 - x0);
+      const t = (x - x0) / Math.max(1e-4, x1 - x0);
       return y0 * (1 - t) + y1 * t;
     }
   }
   return samples[samples.length - 1][1];
 }
-
 function roadCenterTarget() {
   return state.focusTarget ? state.focusTarget.clone() : new THREE.Vector3(state.followX, roadHeightAt(state.followX) + 1.8, 0);
 }
-
 function cameraDirection() {
   return new THREE.Vector3(
     Math.cos(state.pitch) * Math.cos(state.yaw),
@@ -369,19 +388,16 @@ function cameraDirection() {
     Math.cos(state.pitch) * Math.sin(state.yaw)
   ).normalize();
 }
-
 function syncAnglesFromCamera(target = null) {
   const dir = target ? target.clone().sub(camera.position).normalize() : camera.getWorldDirection(new THREE.Vector3());
   state.yaw = Math.atan2(dir.z, dir.x);
   state.pitch = Math.asin(THREE.MathUtils.clamp(dir.y, -0.98, 0.98));
 }
-
 function setFreeMode() {
   if (state.cameraMode !== "free") syncAnglesFromCamera();
   state.cameraMode = "free";
   state.followId = null;
 }
-
 function syncOrbitFromTarget(target) {
   state.orbitTarget = target.clone();
   const offset = camera.position.clone().sub(target);
@@ -389,7 +405,6 @@ function syncOrbitFromTarget(target) {
   state.orbitYaw = Math.atan2(offset.z, offset.x);
   state.orbitPitch = Math.asin(THREE.MathUtils.clamp(offset.y / state.orbitRadius, -0.98, 0.98));
 }
-
 function orbitOffset() {
   const cp = Math.cos(state.orbitPitch);
   return new THREE.Vector3(
@@ -398,7 +413,6 @@ function orbitOffset() {
     cp * Math.sin(state.orbitYaw)
   ).multiplyScalar(state.orbitRadius);
 }
-
 function applyOrbitCamera(instant = false) {
   if (!state.orbitTarget) state.orbitTarget = roadCenterTarget();
   const desired = state.orbitTarget.clone().add(orbitOffset());
@@ -407,11 +421,10 @@ function applyOrbitCamera(instant = false) {
   camera.lookAt(state.orbitTarget);
   syncAnglesFromCamera(state.orbitTarget);
 }
-
 function beginOrbitDrag(event) {
   if (state.followId && state.meshes.has(state.followId)) {
-    const target = state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0));
-    syncOrbitFromTarget(target);
+    const target2 = state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    syncOrbitFromTarget(target2);
     state.cameraMode = "followOrbit";
     return;
   }
@@ -422,24 +435,21 @@ function beginOrbitDrag(event) {
   state.autoOrbitRadius = state.orbitRadius;
   state.cameraMode = "autoOrbit";
 }
-
 function updateOrbitFromDrag(dx, dy) {
   if (state.cameraMode === "autoOrbit") {
-    state.autoOrbitYaw -= dx * 0.006;
-    state.autoOrbitPitch = THREE.MathUtils.clamp(state.autoOrbitPitch + dy * 0.0045, -1.25, 1.35);
+    state.autoOrbitYaw -= dx * 6e-3;
+    state.autoOrbitPitch = THREE.MathUtils.clamp(state.autoOrbitPitch + dy * 45e-4, -1.25, 1.35);
     return;
   }
-  state.orbitYaw -= dx * 0.006;
-  state.orbitPitch = THREE.MathUtils.clamp(state.orbitPitch + dy * 0.0045, -1.25, 1.35);
+  state.orbitYaw -= dx * 6e-3;
+  state.orbitPitch = THREE.MathUtils.clamp(state.orbitPitch + dy * 45e-4, -1.25, 1.35);
   applyOrbitCamera(true);
 }
-
 function setPointerFromEvent(event) {
   const rect = renderer.domElement.getBoundingClientRect();
-  pointer.x = ((event.clientX - rect.left) / rect.width) * 2 - 1;
+  pointer.x = (event.clientX - rect.left) / rect.width * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 }
-
 function raycastFromEvent(event) {
   setPointerFromEvent(event);
   raycaster.setFromCamera(pointer, camera);
@@ -447,16 +457,15 @@ function raycastFromEvent(event) {
   if (state.roadMesh) objects.push(state.roadMesh);
   return raycaster.intersectObjects(objects, true)[0] || null;
 }
-
 function carIdForObject(object) {
+  var _a2;
   let current = object;
   while (current) {
-    if (current.userData?.carId) return current.userData.carId;
+    if ((_a2 = current.userData) == null ? void 0 : _a2.carId) return current.userData.carId;
     current = current.parent;
   }
   return null;
 }
-
 function updateFreeCamera(dt) {
   const dir = cameraDirection();
   const flatForward = new THREE.Vector3(dir.x, 0, dir.z).normalize();
@@ -473,23 +482,22 @@ function updateFreeCamera(dt) {
   if (move.lengthSq() > 0) camera.position.add(move.normalize().multiplyScalar(speed));
   camera.lookAt(camera.position.clone().add(dir));
 }
-
 function updateCamera(dt) {
   if (state.cameraMode === "followOrbit" && state.followId && state.meshes.has(state.followId)) {
-    const target = state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0));
-    state.orbitTarget = state.orbitTarget ? state.orbitTarget.lerp(target, 1 - Math.exp(-dt * 7.0)) : target;
+    const target2 = state.meshes.get(state.followId).position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    state.orbitTarget = state.orbitTarget ? state.orbitTarget.lerp(target2, 1 - Math.exp(-dt * 7)) : target2;
     applyOrbitCamera(false);
     return;
   }
   if (state.cameraMode === "follow" && state.followId && state.meshes.has(state.followId)) {
     const mesh = state.meshes.get(state.followId);
-    const target = mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
-    const desired = target.clone().add(new THREE.Vector3(-10, 5.2, 8.5));
-    camera.position.lerp(desired, 1 - Math.exp(-dt * 4.2));
-    const look = target.clone().add(new THREE.Vector3(2.2, 0.2, 0));
+    const target2 = mesh.position.clone().add(new THREE.Vector3(0, 1.2, 0));
+    const desired2 = target2.clone().add(new THREE.Vector3(-10, 5.2, 8.5));
+    camera.position.lerp(desired2, 1 - Math.exp(-dt * 4.2));
+    const look = target2.clone().add(new THREE.Vector3(2.2, 0.2, 0));
     const currentDir = camera.getWorldDirection(new THREE.Vector3());
     const currentLook = camera.position.clone().add(currentDir.multiplyScalar(camera.position.distanceTo(look)));
-    camera.lookAt(currentLook.lerp(look, 1 - Math.exp(-dt * 6.0)));
+    camera.lookAt(currentLook.lerp(look, 1 - Math.exp(-dt * 6)));
     syncAnglesFromCamera(look);
     return;
   }
@@ -498,16 +506,16 @@ function updateCamera(dt) {
     return;
   }
   if (state.cameraMode === "autoOrbit") {
-    const target = roadCenterTarget();
-    const cp = Math.cos(state.autoOrbitPitch);
-    const desired = target.clone().add(new THREE.Vector3(
-      cp * Math.cos(state.autoOrbitYaw),
+    const target2 = roadCenterTarget();
+    const cp2 = Math.cos(state.autoOrbitPitch);
+    const desired2 = target2.clone().add(new THREE.Vector3(
+      cp2 * Math.cos(state.autoOrbitYaw),
       Math.sin(state.autoOrbitPitch),
-      cp * Math.sin(state.autoOrbitYaw)
+      cp2 * Math.sin(state.autoOrbitYaw)
     ).multiplyScalar(state.autoOrbitRadius));
-    camera.position.lerp(desired, 1 - Math.exp(-dt * 4.2));
-    camera.lookAt(target);
-    syncAnglesFromCamera(target);
+    camera.position.lerp(desired2, 1 - Math.exp(-dt * 4.2));
+    camera.lookAt(target2);
+    syncAnglesFromCamera(target2);
     return;
   }
   if (state.cameraMode === "free") {
@@ -525,7 +533,6 @@ function updateCamera(dt) {
   camera.lookAt(target);
   syncAnglesFromCamera(target);
 }
-
 function render() {
   requestAnimationFrame(render);
   const dt = Math.min(0.08, clock.getDelta());
@@ -534,7 +541,6 @@ function render() {
   renderer.render(scene, camera);
 }
 render();
-
 function svgGeneLayout(gene, large = false) {
   const width = large ? 420 : 260;
   const height = large ? 340 : 78;
@@ -542,7 +548,7 @@ function svgGeneLayout(gene, large = false) {
     left: large ? 24 : 12,
     right: width - (large ? 24 : 12),
     top: large ? 42 : 22,
-    bottom: height - (large ? 54 : 19),
+    bottom: height - (large ? 54 : 19)
   };
   const xs = [];
   const ys = [];
@@ -571,18 +577,17 @@ function svgGeneLayout(gene, large = false) {
     plot,
     scale,
     x: (value) => screenCenterX + (value - centerX) * scale,
-    y: (value) => screenCenterY - (value - centerY) * scale,
+    y: (value) => screenCenterY - (value - centerY) * scale
   };
 }
-
 function svgForGene(gene, carState = null, large = false) {
   const layout = svgGeneLayout(gene, large);
   const pts = gene.body.map(([x, y]) => `${layout.x(x).toFixed(1)},${layout.y(y).toFixed(1)}`).join(" ");
-  const wheelSvg = gene.wheels.map((w) => {
-    const cx = layout.x(w.x);
-    const cy = layout.y(w.y);
-    const r = w.radius * layout.scale;
-    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w.power_fraction * 100)}</text>`;
+  const wheelSvg = gene.wheels.map((w2) => {
+    const cx = layout.x(w2.x);
+    const cy = layout.y(w2.y);
+    const r = w2.radius * layout.scale;
+    return `<circle cx="${cx.toFixed(1)}" cy="${cy.toFixed(1)}" r="${r.toFixed(1)}" fill="#111111" stroke="#e5e5e5" stroke-width="2"/><text x="${cx.toFixed(1)}" y="${(cy + 4).toFixed(1)}" text-anchor="middle" font-size="${large ? 13 : 8}" fill="#fff">${Math.round(w2.power_fraction * 100)}</text>`;
   }).join("");
   const w = layout.width;
   const h = layout.height;
@@ -596,11 +601,112 @@ function svgForGene(gene, carState = null, large = false) {
     <text x="10" y="${h - 8}" fill="#e5e5e5" font-size="${large ? 14 : 10}">${score}</text>
   </svg>`;
 }
-
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>\"']/g, (ch) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[ch]);
+}
+function exportedCarPayload(gene, source = "simulator") {
+  return {
+    type: "genetic-car-simulator.car",
+    version: 1,
+    exportedAt: (/* @__PURE__ */ new Date()).toISOString(),
+    source,
+    gene
+  };
+}
+function extractGene(payload) {
+  if (!payload || typeof payload !== "object") throw new Error("Import JSON must be an object.");
+  const gene = payload.gene && typeof payload.gene === "object" ? payload.gene : payload;
+  if (!Array.isArray(gene.body) || !Array.isArray(gene.wheels) || !gene.color) {
+    throw new Error("Import JSON does not look like an exported car gene.");
+  }
+  return gene;
+}
+function downloadGene(gene, source = "simulator") {
+  const payload = exportedCarPayload(gene, source);
+  const blob = new Blob([JSON.stringify(payload, null, 2)], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = `car-${gene.id || "gene"}.json`;
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+}
+async function importGene(gene, index = null) {
+  var _a2;
+  const slot = Number(index ?? ((_a2 = $("import-slot")) == null ? void 0 : _a2.value) ?? 0);
+  const data = await post("/api/import-car", { gene, index: slot });
+  state.data = data;
+  ingestSnapshot(data);
+  updateUI(data);
+  setTab("sim");
+}
+function geneStats(gene, car = null) {
+  const usedPower = gene.used_power_fraction ?? (gene.wheels || []).reduce((sum, w) => sum + Number(w.power_fraction || 0), 0);
+  return [
+    ["ID", gene.id],
+    ["Generation", gene.generation ?? "—"],
+    ["Lineage", gene.lineage || "—"],
+    ["Reproduction", gene.reproduction || "—"],
+    ["Fitness", Number((car == null ? void 0 : car.fitness) ?? gene.fitness ?? 0).toFixed(2)],
+    ["Distance", `${Math.max(0, Number((car == null ? void 0 : car.maxX) ?? 4) - 4 || gene.distance || 0).toFixed(2)}m`],
+    ["Time alive", `${Number(gene.time_alive || 0).toFixed(2)}s`],
+    ["Body points", (gene.body || []).length],
+    ["Wheels", (gene.wheels || []).length],
+    ["Power used", `${Math.round(usedPower * 100)}%`],
+    ["Width", Number(gene.width || 0).toFixed(2)],
+    ["Density", Number(gene.density || 0).toFixed(2)]
+  ];
+}
+function renderSelectedPanel(gene, car = null, source = "simulator") {
+  const panel = $("selected-car-panel");
+  if (!panel || !gene) return;
+  panel.classList.remove("hidden");
+  $("selected-car-title").textContent = `${gene.id || "car"} · ${source}`;
+  const stats = geneStats(gene, car).map(([key, value]) => `<div><span>${escapeHtml(key)}</span><strong>${escapeHtml(value)}</strong></div>`).join("");
+  $("selected-car-content").innerHTML = `
+    ${svgForGene(gene, car, true)}
+    <div class="stats-grid">${stats}</div>
+    <div class="selected-actions">
+      <button type="button" data-action="export-selected">Export JSON</button>
+      <button type="button" data-action="copy-selected">Copy JSON</button>
+      <button type="button" data-action="import-selected">Import into slot</button>
+    </div>
+    <details><summary>gene JSON</summary><pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre></details>
+  `;
+  state.selectedGeneSnapshot = gene;
+  state.selectedCarSnapshot = car;
+}
+function selectCarById(id) {
+  var _a2, _b2, _c2, _d2;
+  state.selectedCarId = id;
+  const gene = (_b2 = (_a2 = state.data) == null ? void 0 : _a2.population) == null ? void 0 : _b2.find((item) => item.id === id);
+  const car = (_d2 = (_c2 = state.data) == null ? void 0 : _c2.cars) == null ? void 0 : _d2.find((item) => item.id === id);
+  if (gene) renderSelectedPanel(gene, car, "simulator");
+}
+function selectDetachedGene(gene, source = "genealogy") {
+  state.selectedCarId = null;
+  renderSelectedPanel(gene, null, source);
+}
+function updateSelectedPanel(data) {
+  var _a2, _b2;
+  if (!state.selectedCarId) return;
+  const gene = (_a2 = data.population) == null ? void 0 : _a2.find((item) => item.id === state.selectedCarId);
+  if (!gene) return;
+  const car = (_b2 = data.cars) == null ? void 0 : _b2.find((item) => item.id === state.selectedCarId);
+  renderSelectedPanel(gene, car, "simulator");
+}
+function updateImportSlots(data) {
+  const select = $("import-slot");
+  if (!select || !(data == null ? void 0 : data.population)) return;
+  const current = select.value;
+  select.innerHTML = data.population.map((gene, index) => `<option value="${index}">#${index} · ${escapeHtml(gene.id)}</option>`).join("");
+  if ([...select.options].some((option) => option.value === current)) select.value = current;
+}
 function reproductionClass(value = "") {
   return value.replace(/[^a-z0-9]+/gi, "-").replace(/^-|-$/g, "").toLowerCase() || "random";
 }
-
 function reproductionColor(value = "") {
   const cls = reproductionClass(value);
   if (cls.includes("elite")) return "#f5f5f5";
@@ -608,9 +714,9 @@ function reproductionColor(value = "") {
   if (cls.includes("crossover")) return "#a3a3a3";
   return "#737373";
 }
-
 function miniGenePreview(car) {
-  if (!car.body?.length) return "";
+  var _a2;
+  if (!((_a2 = car.body) == null ? void 0 : _a2.length)) return "";
   const xs = car.body.map((p) => p[0]);
   const ys = car.body.map((p) => p[1]);
   const minX = Math.min(...xs), maxX = Math.max(...xs);
@@ -631,17 +737,17 @@ function miniGenePreview(car) {
     ${wheels}
   </g>`;
 }
-
 function updateGenealogy(data) {
+  var _a2;
   const holder = $("genealogy-tree");
-  if (!holder || !data.genealogy?.length) return;
+  if (!holder || !((_a2 = data.genealogy) == null ? void 0 : _a2.length)) return;
   const key = data.genealogy.map((g) => `${g.generation}:${g.cars.map((c) => `${c.id}-${c.fitness}`).join(",")}`).join("|");
   if (state.genealogyKey === key) return;
   state.genealogyKey = key;
   const generations = data.genealogy;
-  const nodeById = new Map();
+  const nodeById = /* @__PURE__ */ new Map();
   generations.forEach((gen, gi) => gen.cars.forEach((car, ci) => nodeById.set(car.id, { ...car, gi, ci })));
-  const hasChild = new Set();
+  const hasChild = /* @__PURE__ */ new Set();
   generations.forEach((gen) => gen.cars.forEach((car) => (car.parentIds || []).forEach((pid) => hasChild.add(pid))));
   const colW = 190;
   const rowH = 104;
@@ -674,7 +780,9 @@ function updateGenealogy(data) {
     const p = pos(node);
     const removed = gen.generation < data.generation && !hasChild.has(car.id);
     const color = reproductionColor(car.reproduction || car.lineage);
-    const title = `${car.id} · ${car.reproduction}\nfitness ${Number(car.fitness || 0).toFixed(1)}\nparents ${(car.parentIds || []).join(", ") || "none"}`;
+    const title = `${car.id} · ${car.reproduction}
+fitness ${Number(car.fitness || 0).toFixed(1)}
+parents ${(car.parentIds || []).join(", ") || "none"}`;
     return `<g class="gene-node ${removed ? "removed" : ""}" data-gene-id="${car.id}" transform="translate(${p.x},${p.y})">
       <title>${title}</title>
       <circle r="18" fill="${color}" stroke="#f8fafc" stroke-width="1.2" />
@@ -689,53 +797,113 @@ function updateGenealogy(data) {
   holder.querySelectorAll(".gene-node").forEach((node) => {
     node.addEventListener("click", () => {
       const gene = nodeById.get(node.dataset.geneId);
-      $("genealogy-details").textContent = JSON.stringify(gene, null, 2);
+      const details = $("genealogy-details");
+      details.innerHTML = `
+        ${svgForGene(gene, null, false)}
+        <div class="selected-actions"><button type="button" data-action="export-genealogy">Export JSON</button><button type="button" data-action="import-genealogy">Import into slot</button></div>
+        <pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre>
+      `;
+      details.querySelector('[data-action="export-genealogy"]').addEventListener("click", () => downloadGene(gene, "genealogy"));
+      details.querySelector('[data-action="import-genealogy"]').addEventListener("click", () => fire(importGene(gene)));
+      selectDetachedGene(gene, "genealogy");
     });
   });
 }
-
 function timeAgo(timestampSeconds) {
   if (!timestampSeconds) return "unknown";
-  const seconds = Math.max(0, Date.now() / 1000 - timestampSeconds);
+  const seconds = Math.max(0, Date.now() / 1e3 - timestampSeconds);
   if (seconds < 60) return "just now";
   if (seconds < 3600) return `${Math.floor(seconds / 60)}m ago`;
   if (seconds < 86400) return `${Math.floor(seconds / 3600)}h ago`;
   return `${Math.floor(seconds / 86400)}d ago`;
 }
-
 async function refreshLeaderboard(force = false) {
   const holder = $("leaderboard-list");
   if (!holder) return;
   const now = performance.now();
-  if (!force && state.leaderboardLoadedAt && now - state.leaderboardLoadedAt < 5000) return;
+  if (!force && state.leaderboardLoadedAt && now - state.leaderboardLoadedAt < 5e3) return;
   holder.textContent = "Loading leaderboard…";
   const res = await fetch("/api/leaderboard", { credentials: "same-origin" });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   state.leaderboardLoadedAt = now;
+  state.leaderboardData = data;
   holder.innerHTML = (data.maps || []).map((map) => {
     const entries = map.entries || [];
     const rows = entries.length ? entries.map((entry, index) => `
-      <article class="leaderboard-entry">
+      <article class="leaderboard-entry ${entry.isCurrentUser ? "current-user" : ""}" data-map-id="${escapeHtml(map.id)}" data-entry-index="${index}">
         <div class="leaderboard-rank">#${index + 1}</div>
         <div class="leaderboard-preview">${svgForGene(entry.gene, null, false)}</div>
         <div class="leaderboard-meta">
-          <strong>${entry.displayName || "visitor"}</strong>
+          <strong class="leaderboard-name" title="${entry.isCurrentUser ? "Click to edit your nickname" : ""}">${escapeHtml(entry.displayName || "visitor")}${entry.isCurrentUser ? ' <span class="you-marker">you</span>' : ""}</strong>
           <span>fitness ${Number(entry.fitness || 0).toFixed(1)} · distance ${Number(entry.distance || 0).toFixed(1)}m · gen ${entry.generation ?? 0}</span>
-          <span>${entry.carId || "car"} · ${timeAgo(entry.recordedAt)}</span>
+          <span>${escapeHtml(entry.carId || "car")} · ${timeAgo(entry.recordedAt)}</span>
+          <span class="leaderboard-actions"><button type="button" data-action="export-leaderboard">Export</button><button type="button" data-action="import-leaderboard">Import</button></span>
         </div>
       </article>
     `).join("") : `<p class="small-note">No records yet for this map.</p>`;
     return `<section class="leaderboard-map">
-      <div class="leaderboard-map-heading"><h3>${map.label}</h3><span>${entries.length}/10 records</span></div>
+      <div class="leaderboard-map-heading"><h3>${escapeHtml(map.label)}</h3><span>${entries.length}/10 records</span></div>
       ${rows}
     </section>`;
   }).join("");
+  holder.querySelectorAll(".leaderboard-entry").forEach((row) => {
+    row.addEventListener("click", (event) => {
+      var _a2, _b2, _c2, _d2, _e;
+      const map = (state.leaderboardData.maps || []).find((item) => item.id === row.dataset.mapId);
+      const entry = (_a2 = map == null ? void 0 : map.entries) == null ? void 0 : _a2[Number(row.dataset.entryIndex)];
+      if (!entry) return;
+      const action = (_c2 = (_b2 = event.target) == null ? void 0 : _b2.dataset) == null ? void 0 : _c2.action;
+      const nameClick = (_e = (_d2 = event.target) == null ? void 0 : _d2.closest) == null ? void 0 : _e.call(_d2, ".leaderboard-name");
+      if (action === "export-leaderboard") {
+        downloadGene(entry.gene, "leaderboard");
+      } else if (action === "import-leaderboard") {
+        fire(importGene(entry.gene));
+      } else if (nameClick && entry.isCurrentUser) {
+        fire(editLeaderboardName(entry.displayName || ""));
+      } else {
+        selectDetachedGene(entry.gene, "leaderboard");
+      }
+    });
+  });
 }
-
+async function editLeaderboardName(currentName) {
+  const next = prompt("Leaderboard nickname", currentName || "");
+  if (next === null) return;
+  const res = await post("/api/leaderboard/name", { display_name: next });
+  state.leaderboardData = res;
+  state.leaderboardLoadedAt = 0;
+  await refreshLeaderboard(true);
+}
+function formatSpeed(value) {
+  return `${Number(value).toFixed(Number(value) < 10 ? 2 : 0)}×`;
+}
+function setSpeedControl(value) {
+  const speed = Number(value || DEFAULT_SPEED);
+  const input = $("speed");
+  const isEditing = input && document.activeElement === input;
+  if (input && !isEditing) input.value = String(speed);
+  if ($("speed-label") && !isEditing) $("speed-label").textContent = formatSpeed(speed);
+}
+function resetTransientControls() {
+  setSpeedControl(DEFAULT_SPEED);
+  const mutation = $("mutation");
+  if (mutation) mutation.value = String(DEFAULT_MUTATION_RATE);
+  if ($("mutation-label")) $("mutation-label").textContent = DEFAULT_MUTATION_RATE.toFixed(2);
+  if ($("import-json")) $("import-json").value = "";
+  if ($("import-file")) $("import-file").value = "";
+}
 function updateUI(data) {
-  $("status").textContent = `gen ${data.generation} · ${data.road?.preset || "map"} · ${data.autoEvolve ? "auto-evolving" : data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
-  if ($("map-select") && data.road?.preset && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
+  var _a2, _b2;
+  $("status").textContent = `gen ${data.generation} · ${((_a2 = data.road) == null ? void 0 : _a2.preset) || "map"} · ${data.autoEvolve ? "auto-evolving" : data.running ? "running" : "stopped"} · t=${data.simTime.toFixed(1)}s · ${data.speed.toFixed(2)}×`;
+  setSpeedControl(data.speed);
+  if ($("map-select") && ((_b2 = data.road) == null ? void 0 : _b2.preset) && $("map-select").value !== data.road.preset) $("map-select").value = data.road.preset;
+  if ($("start")) {
+    const isRunning = !!(data.running || data.autoEvolve);
+    $("start").textContent = isRunning ? "Pause" : "Start";
+    $("start").classList.toggle("running", isRunning);
+    $("start").title = isRunning ? "Pause this simulation" : "Start a fresh evaluation from scratch";
+  }
   if ($("auto-evolve")) {
     $("auto-evolve").textContent = data.autoEvolve ? "Stop auto-run" : "Auto-run generations";
     $("auto-evolve").classList.toggle("running", !!data.autoEvolve);
@@ -743,19 +911,32 @@ function updateUI(data) {
   const bestCar = [...data.cars].sort((a, b) => b.fitness - a.fitness)[0];
   $("best").textContent = bestCar ? `best ${bestCar.id}: ${bestCar.fitness.toFixed(1)} (${Math.max(0, bestCar.maxX - 4).toFixed(1)}m)` : "best: —";
   const list = $("cars-list");
+  updateImportSlots(data);
+  updateSelectedPanel(data);
   if (state.activeTab === "genealogy") updateGenealogy(data);
   list.innerHTML = data.population.map((gene) => {
     const car = data.cars.find((c) => c.id === gene.id);
-    const cls = car?.done ? (car.reason === "crashed" ? "done crashed" : "done") : "";
-    return `<article class="car-card ${cls}">
-      <div class="car-top"><strong>#${car?.index ?? "?"} ${gene.id}</strong><span class="metric">${(car?.fitness ?? gene.fitness).toFixed(1)}</span></div>
-      <div class="badge">${gene.lineage} · ${gene.wheels.length} wheels · power ${Math.round(gene.used_power_fraction * 100)}% · ${car?.reason || "evaluating"}</div>
+    const cls = [(car == null ? void 0 : car.done) ? car.reason === "crashed" ? "done crashed" : "done" : "", state.selectedCarId === gene.id ? "selected" : ""].join(" ");
+    return `<article class="car-card ${cls}" data-car-id="${escapeHtml(gene.id)}">
+      <div class="car-top"><strong>#${(car == null ? void 0 : car.index) ?? "?"} ${escapeHtml(gene.id)}</strong><span class="metric">${((car == null ? void 0 : car.fitness) ?? gene.fitness).toFixed(1)}</span></div>
+      <div class="badge">${escapeHtml(gene.lineage)} · ${gene.wheels.length} wheels · power ${Math.round(gene.used_power_fraction * 100)}% · ${escapeHtml((car == null ? void 0 : car.reason) || "evaluating")}</div>
       ${svgForGene(gene, car)}
-      <details><summary>gene</summary><pre>${JSON.stringify(gene, null, 2)}</pre></details>
+      <div class="card-actions"><button type="button" data-action="export-main">Export</button><button type="button" data-action="import-main">Duplicate to slot</button></div>
+      <details><summary>gene</summary><pre>${escapeHtml(JSON.stringify(gene, null, 2))}</pre></details>
     </article>`;
   }).join("");
+  list.querySelectorAll(".car-card").forEach((card) => {
+    card.addEventListener("click", (event) => {
+      var _a3, _b3, _c2, _d2;
+      const id = card.dataset.carId;
+      const gene = data.population.find((item) => item.id === id);
+      if (!gene) return;
+      if (((_b3 = (_a3 = event.target) == null ? void 0 : _a3.dataset) == null ? void 0 : _b3.action) === "export-main") downloadGene(gene, "simulator");
+      else if (((_d2 = (_c2 = event.target) == null ? void 0 : _c2.dataset) == null ? void 0 : _d2.action) === "import-main") fire(importGene(gene));
+      else selectCarById(id);
+    });
+  });
 }
-
 function connectWs() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   const sessionQuery = state.sessionId ? `?session=${encodeURIComponent(state.sessionId)}` : "";
@@ -772,45 +953,74 @@ function connectWs() {
       state.lastRunning = data.running;
     }
   };
-  ws.onclose = () => setTimeout(connectWs, 1000);
+  ws.onclose = () => setTimeout(connectWs, 1e3);
 }
-
 async function initSession() {
   const res = await fetch("/api/session", { method: "POST", credentials: "same-origin" });
   if (!res.ok) throw new Error(await res.text());
   const data = await res.json();
   state.sessionId = data.sessionId;
 }
-
 async function post(url, body) {
-  const res = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : undefined });
+  const res = await fetch(url, { method: "POST", credentials: "same-origin", headers: { "Content-Type": "application/json" }, body: body ? JSON.stringify(body) : void 0 });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }
-
 function fire(promise) {
   promise.catch((err) => {
     console.error(err);
     $("status").textContent = `request failed: ${err.message || err}`;
   });
 }
-
-$("start").addEventListener("click", () => fire(post("/api/start")));
-$("pause").addEventListener("click", () => fire(post("/api/pause")));
+function parseImportText(text) {
+  return extractGene(JSON.parse(text));
+}
+(_a = $("selected-car-content")) == null ? void 0 : _a.addEventListener("click", (event) => {
+  var _a2, _b2;
+  const action = (_b2 = (_a2 = event.target) == null ? void 0 : _a2.dataset) == null ? void 0 : _b2.action;
+  if (!action || !state.selectedGeneSnapshot) return;
+  if (action === "export-selected") downloadGene(state.selectedGeneSnapshot, "selected");
+  if (action === "copy-selected") {
+    const payload = JSON.stringify(exportedCarPayload(state.selectedGeneSnapshot, "selected"), null, 2);
+    fire(navigator.clipboard.writeText(payload));
+  }
+  if (action === "import-selected") fire(importGene(state.selectedGeneSnapshot));
+});
+(_b = $("import-file")) == null ? void 0 : _b.addEventListener("change", async (event) => {
+  var _a2;
+  const file = (_a2 = event.target.files) == null ? void 0 : _a2[0];
+  if (!file) return;
+  $("import-json").value = await file.text();
+});
+(_c = $("import-car")) == null ? void 0 : _c.addEventListener("click", () => {
+  try {
+    const gene = parseImportText($("import-json").value);
+    fire(importGene(gene));
+  } catch (err) {
+    $("status").textContent = `import failed: ${err.message || err}`;
+  }
+});
+$("start").addEventListener("click", () => {
+  var _a2, _b2;
+  const isRunning = !!(((_a2 = state.data) == null ? void 0 : _a2.running) || ((_b2 = state.data) == null ? void 0 : _b2.autoEvolve));
+  fire(post(isRunning ? "/api/pause" : "/api/start"));
+});
 $("randomize").addEventListener("click", () => fire(post("/api/randomize")));
 $("evolve").addEventListener("click", () => fire(post("/api/evolve", { elite_count: 2, copy_count: 1, mutation_rate: Number($("mutation").value) })));
 $("auto-evolve").addEventListener("click", () => {
-  const enabled = !(state.data?.autoEvolve);
+  var _a2;
+  const enabled = !((_a2 = state.data) == null ? void 0 : _a2.autoEvolve);
   fire(post("/api/auto-evolve", { enabled, elite_count: 2, copy_count: 1, mutation_rate: Number($("mutation").value) }));
 });
 $("speed").addEventListener("input", (event) => {
   const value = Number(event.target.value);
-  $("speed-label").textContent = `${value.toFixed(value < 10 ? 2 : 0)}×`;
+  $("speed-label").textContent = formatSpeed(value);
   fire(post("/api/speed", { speed: value }));
 });
 $("map-select").addEventListener("change", (event) => fire(post("/api/map", { preset: event.target.value })));
-$("mutation").addEventListener("input", (event) => { $("mutation-label").textContent = Number(event.target.value).toFixed(2); });
-
+$("mutation").addEventListener("input", (event) => {
+  $("mutation-label").textContent = Number(event.target.value).toFixed(2);
+});
 function setTab(name) {
   state.activeTab = name;
   $("simulation-view").classList.toggle("active", name === "sim");
@@ -829,19 +1039,28 @@ $("tab-sim").addEventListener("click", () => setTab("sim"));
 $("tab-random").addEventListener("click", () => setTab("random"));
 $("tab-genealogy").addEventListener("click", () => setTab("genealogy"));
 $("tab-leaderboard").addEventListener("click", () => setTab("leaderboard"));
-
 async function generateOne() {
   const res = await fetch("/api/random-car", { credentials: "same-origin" });
   if (!res.ok) throw new Error(await res.text());
   const gene = await res.json();
+  state.randomGene = gene;
   $("random-svg").innerHTML = svgForGene(gene, null, true);
   $("random-json").textContent = JSON.stringify(gene, null, 2);
+  if ($("export-random")) $("export-random").disabled = false;
 }
 $("generate-one").addEventListener("click", () => fire(generateOne()));
-
+(_d = $("export-random")) == null ? void 0 : _d.addEventListener("click", () => {
+  if (state.randomGene) downloadGene(state.randomGene, "random-lab");
+});
 async function boot() {
   try {
+    resetTransientControls();
     await initSession();
+    try {
+      await post("/api/speed", { speed: DEFAULT_SPEED });
+    } catch (err) {
+      console.warn("could not reset transient speed setting", err);
+    }
     connectWs();
     await generateOne();
   } catch (err) {

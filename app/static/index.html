@@ -48,7 +48,6 @@
           </div>
           <div class="button-grid">
             <button id="start">Start</button>
-            <button id="pause">Pause</button>
             <button id="randomize">Randomize</button>
             <button id="evolve" class="primary">Evolve</button>
             <button id="auto-evolve" class="wide">Auto-run</button>
@@ -70,12 +69,27 @@
             <input id="mutation" type="range" min="0" max="0.65" step="0.01" value="0.22" />
           </label>
         </div>
+        <div id="selected-car-panel" class="card selected-card hidden">
+          <div class="card-heading">
+            <span class="eyebrow">Selected car</span>
+            <h2 id="selected-car-title">No car selected</h2>
+          </div>
+          <div id="selected-car-content" class="selected-car-content"></div>
+        </div>
         <div class="card">
           <div class="card-heading">
             <span class="eyebrow">Population</span>
             <h2>Current cars + genes</h2>
           </div>
           <div id="cars-list" class="cars-list"></div>
+          <div class="import-box population-import">
+            <div class="import-row">
+              <label class="field compact"><span>Import slot</span><select id="import-slot"></select></label>
+              <button id="import-car" type="button">Import car</button>
+            </div>
+            <textarea id="import-json" rows="4" placeholder="Paste exported car JSON here, or choose a .json file"></textarea>
+            <input id="import-file" type="file" accept="application/json,.json" />
+          </div>
         </div>
       </aside>
     </main>
@@ -100,7 +114,7 @@
           <div class="legend-row"><span class="legend-dot copy"></span> copied/mutated</div>
           <div class="legend-row"><span class="legend-dot crossover"></span> crossover/mutation</div>
           <p class="small-note">Grey faded nodes have no children in the next generation.</p>
-          <pre id="genealogy-details">Click a node in the tree.</pre>
+          <div id="genealogy-details" class="genealogy-details">Click a node in the tree.</div>
         </aside>
       </section>
     </main>
@@ -126,7 +140,10 @@
             <h2>Random car lab</h2>
           </div>
           <p>Generate standalone genes before running evolution.</p>
-          <button id="generate-one" class="primary">Generate random car</button>
+          <div class="random-actions">
+            <button id="generate-one" class="primary">Generate random car</button>
+            <button id="export-random" type="button" disabled>Export JSON</button>
+          </div>
           <div id="random-svg" class="large-svg"></div>
         </div>
         <div class="card gene-card">

@@ -8,6 +8,9 @@ from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
+DISPLAY_NAME_MAX_LENGTH = 28
+DISPLAY_NAME_REPLACEMENTS = str.maketrans({"\n": " ", "\r": " ", "\t": " "})
+
 from .road import ROAD_PRESETS
 
 LEADERBOARD_LIMIT = 10
@@ -27,8 +30,14 @@ class LeaderboardStore:
             "maps": {preset: [] for preset in ROAD_PRESETS.keys()},
         }
 
-    def _user_id(self, session_id: str) -> str:
+    def user_id(self, session_id: str) -> str:
         return sha256(session_id.encode("utf-8")).hexdigest()[:12]
+
+    def _clean_display_name(self, display_name: str, fallback_user_id: str) -> str:
+        name = " ".join(display_name.translate(DISPLAY_NAME_REPLACEMENTS).strip().split())
+        if not name:
+            return f"visitor-{fallback_user_id[:6]}"
+        return name[:DISPLAY_NAME_MAX_LENGTH]
 
     def _load_sync(self) -> dict[str, Any]:
         if not self.path.exists():
@@ -43,6 +52,9 @@ class LeaderboardStore:
             return self._empty()
         data.setdefault("version", 1)
         data.setdefault("updatedAt", None)
+        profiles = data.setdefault("profiles", {})
+        if not isinstance(profiles, dict):
+            data["profiles"] = {}
         maps = data.setdefault("maps", {})
         for preset in ROAD_PRESETS.keys():
             entries = maps.get(preset, [])
@@ -88,7 +100,7 @@ class LeaderboardStore:
         if fitness <= 0 and distance <= 0:
             return None
 
-        user_id = self._user_id(session_id)
+        user_id = self.user_id(session_id)
         now = int(time.time())
         return {
             "userId": user_id,
@@ -108,9 +120,18 @@ class LeaderboardStore:
         entries = maps.setdefault(entry["map"], [])
         user_id = entry["userId"]
 
+        profiles = data.setdefault("profiles", {})
+        if isinstance(profiles, dict) and profiles.get(user_id):
+            entry["displayName"] = profiles[user_id]
+
         previous = next((item for item in entries if item.get("userId") == user_id), None)
-        if previous and float(previous.get("fitness") or 0) >= float(entry.get("fitness") or 0):
-            return False
+        if previous:
+            entry["displayName"] = previous.get("displayName") or entry["displayName"]
+            if isinstance(profiles, dict) and profiles.get(user_id):
+                previous["displayName"] = profiles[user_id]
+                entry["displayName"] = profiles[user_id]
+            if float(previous.get("fitness") or 0) >= float(entry.get("fitness") or 0):
+                return False
 
         entries = [item for item in entries if item.get("userId") != user_id]
         entries.append(entry)
@@ -130,18 +151,46 @@ class LeaderboardStore:
                 await asyncio.to_thread(self._save_sync, data)
             return changed
 
-    async def snapshot(self) -> dict[str, Any]:
+    async def set_display_name(self, session_id: str, display_name: str) -> bool:
+        user_id = self.user_id(session_id)
+        clean_name = self._clean_display_name(display_name, user_id)
+        async with self._lock:
+            data = await asyncio.to_thread(self._load_sync)
+            profiles = data.setdefault("profiles", {})
+            changed = not isinstance(profiles, dict) or profiles.get(user_id) != clean_name
+            if isinstance(profiles, dict):
+                profiles[user_id] = clean_name
+            else:
+                data["profiles"] = {user_id: clean_name}
+            for entries in (data.get("maps") or {}).values():
+                if not isinstance(entries, list):
+                    continue
+                for entry in entries:
+                    if entry.get("userId") == user_id and entry.get("displayName") != clean_name:
+                        entry["displayName"] = clean_name
+                        changed = True
+            if changed:
+                data["updatedAt"] = int(time.time())
+                await asyncio.to_thread(self._save_sync, data)
+            return changed
+
+    async def snapshot(self, current_session_id: str | None = None) -> dict[str, Any]:
+        current_user_id = self.user_id(current_session_id) if current_session_id else None
         async with self._lock:
             data = await asyncio.to_thread(self._load_sync)
         maps = data.get("maps", {})
         return {
             "updatedAt": data.get("updatedAt"),
             "limit": self.limit,
+            "currentUserId": current_user_id,
             "maps": [
                 {
                     "id": preset,
                     "label": ROAD_PRESETS[preset]["label"],
-                    "entries": maps.get(preset, [])[: self.limit],
+                    "entries": [
+                        {**entry, "isCurrentUser": bool(current_user_id and entry.get("userId") == current_user_id)}
+                        for entry in maps.get(preset, [])[: self.limit]
+                    ],
                 }
                 for preset in ROAD_PRESETS.keys()
             ],
