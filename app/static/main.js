@@ -19,6 +19,8 @@ const state = {
   dragging: false,
   dragMoved: false,
   dragStart: { x: 0, y: 0 },
+  dragLast: { x: 0, y: 0 },
+  dragHitCarId: null,
   dragPrevMode: "auto",
   dragPrevFollowId: null,
   orbitTarget: null,
@@ -95,25 +97,36 @@ renderer.domElement.addEventListener("pointerdown", (event) => {
   state.dragging = true;
   state.dragMoved = false;
   state.dragStart = { x: event.clientX, y: event.clientY };
+  state.dragLast = { x: event.clientX, y: event.clientY };
   state.dragPrevMode = state.cameraMode;
   state.dragPrevFollowId = state.followId;
-  beginOrbitDrag();
+  state.dragHitCarId = carIdFromEvent(event);
   renderer.domElement.setPointerCapture(event.pointerId);
 });
 renderer.domElement.addEventListener("pointermove", (event) => {
   if (!state.dragging) return;
-  const dx = event.movementX || 0;
-  const dy = event.movementY || 0;
-  if (Math.hypot(event.clientX - state.dragStart.x, event.clientY - state.dragStart.y) > 4) state.dragMoved = true;
-  updateOrbitFromDrag(dx, dy);
+  const totalDx = event.clientX - state.dragStart.x;
+  const totalDy = event.clientY - state.dragStart.y;
+  const dx = event.clientX - state.dragLast.x;
+  const dy = event.clientY - state.dragLast.y;
+  const movedFarEnough = Math.hypot(totalDx, totalDy) > 4;
+  if (!state.dragMoved && movedFarEnough) {
+    state.dragMoved = true;
+    beginOrbitDrag();
+    updateOrbitFromDrag(totalDx, totalDy);
+  } else if (state.dragMoved) {
+    updateOrbitFromDrag(dx, dy);
+  }
+  state.dragLast = { x: event.clientX, y: event.clientY };
 });
 renderer.domElement.addEventListener("pointerup", (event) => {
   if (state.dragging) renderer.domElement.releasePointerCapture(event.pointerId);
   const wasClick = !state.dragMoved;
+  const downCarId = state.dragHitCarId;
   state.dragging = false;
+  state.dragHitCarId = null;
   if (!wasClick) return;
-  const hit = raycastFromEvent(event);
-  const carId = hit ? carIdForObject(hit.object) : null;
+  const carId = downCarId || carIdFromEvent(event);
   if (carId) {
     state.cameraMode = "follow";
     state.followId = carId;
@@ -450,12 +463,14 @@ function setPointerFromEvent(event) {
   pointer.x = (event.clientX - rect.left) / rect.width * 2 - 1;
   pointer.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 }
-function raycastFromEvent(event) {
+function carIdFromEvent(event) {
   setPointerFromEvent(event);
   raycaster.setFromCamera(pointer, camera);
-  const objects = [...state.meshes.values()];
-  if (state.roadMesh) objects.push(state.roadMesh);
-  return raycaster.intersectObjects(objects, true)[0] || null;
+  for (const hit of raycaster.intersectObjects([...state.meshes.values()], true)) {
+    const carId = carIdForObject(hit.object);
+    if (carId) return carId;
+  }
+  return null;
 }
 function carIdForObject(object) {
   var _a2;
@@ -678,15 +693,23 @@ function renderSelectedPanel(gene, car = null, source = "simulator") {
   state.selectedGeneSnapshot = gene;
   state.selectedCarSnapshot = car;
 }
+function updateSelectedCardHighlight() {
+  var _a2;
+  (_a2 = $("cars-list")) == null ? void 0 : _a2.querySelectorAll(".car-card").forEach((card) => {
+    card.classList.toggle("selected", card.dataset.carId === state.selectedCarId);
+  });
+}
 function selectCarById(id) {
   var _a2, _b2, _c2, _d2;
   state.selectedCarId = id;
   const gene = (_b2 = (_a2 = state.data) == null ? void 0 : _a2.population) == null ? void 0 : _b2.find((item) => item.id === id);
   const car = (_d2 = (_c2 = state.data) == null ? void 0 : _c2.cars) == null ? void 0 : _d2.find((item) => item.id === id);
   if (gene) renderSelectedPanel(gene, car, "simulator");
+  updateSelectedCardHighlight();
 }
 function selectDetachedGene(gene, source = "genealogy") {
   state.selectedCarId = null;
+  updateSelectedCardHighlight();
   renderSelectedPanel(gene, null, source);
 }
 function updateSelectedPanel(data) {
